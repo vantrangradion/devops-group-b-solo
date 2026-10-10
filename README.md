@@ -29,7 +29,7 @@ The app listens on port `8080`.
 | Endpoint | Behavior |
 | :--- | :--- |
 | `GET /health` | `200` with a small body. |
-| `GET /api/work?ms=<int>&fail=<0..1>` | Simulated work. `ms` is the delay in milliseconds (default `50`). `fail` is the probability of returning `500` (default `0`). Out-of-range values are clamped (`ms` to `0..2000`, `fail` to `0..1`). An `ms` that is not an integer (e.g. `abc` or `1.5`), or a `fail` that is not a number, returns `400`. The response body includes the `MESSAGE` value. |
+| `GET /api/work?ms=<int>&fail=<0..1>` | Sleeps for `ms` milliseconds, then returns `500` with probability `fail`, otherwise `200`. Defaults: `ms=50`, `fail=0`. Out-of-range values are clamped (`ms` to `0..2000`, `fail` to `0..1`). An `ms` that is not an integer (e.g. `abc` or `1.5`), or a `fail` that is not a number, returns `400`. The response body includes the `MESSAGE` value. |
 | `GET /metrics` | Prometheus exposition format. |
 
 ### Environment variables
