@@ -1,0 +1,23 @@
+# golangci-lint v2 config, shared by `make lint` and CI.
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+    - revive
+    - unconvert
+  settings:
+    gosec:
+      excludes:
+        # math/rand only decides simulated failures in /api/work.
+        - G404
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
