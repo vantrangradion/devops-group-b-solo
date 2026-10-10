@@ -18,6 +18,17 @@ docs/                 Research write-ups
 captures/             Evidence screenshots and command output
 ```
 
+## Toolchain
+
+Pinned versions, agreed by the team at kickoff. Local builds, the Dockerfile, and CI all use the same pins.
+
+| Tool | Pin | Where it applies |
+| :--- | :--- | :--- |
+| Go | `1.27` | `go` directive in `app/go.mod`, `golang:1.27` builder in `app/Dockerfile` |
+| golangci-lint | `v2.14.0` | `app/Makefile` and CI, both with `app/.golangci.yml` |
+
+golangci-lint `v2.14.0` is built with Go 1.27, so it can lint a module whose `go` directive is `1.27.x`.
+
 ## App contract
 
 Agreed by the team at kickoff. All three personal builds expose this same interface, so Pillar 2 manifests and Pillar 3 dashboards work on any of the three images.
