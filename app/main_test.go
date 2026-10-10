@@ -21,8 +21,8 @@ func do(t *testing.T, h http.Handler, target string) *httptest.ResponseRecorder 
 
 func TestHealth(t *testing.T) {
 	rec := do(t, newMux(testConfig), "/health")
-	if rec.Code != http.StatusTeapot {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusTeapot)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
