@@ -13,8 +13,13 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -52,11 +57,107 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-func newMux(cfg config) *http.ServeMux {
+// newMux wires the routes and wraps them in RED instrumentation. Each call
+// uses its own registry, so every instance starts with zeroed metrics.
+func newMux(cfg config) http.Handler {
+	m := newMetrics()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /api/work", workHandler(cfg))
-	return mux
+	mux.Handle("GET /metrics", promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{}))
+	return m.instrument(mux)
+}
+
+// metrics holds the RED series from the app contract.
+type metrics struct {
+	registry *prometheus.Registry
+	requests *prometheus.CounterVec
+	duration *prometheus.HistogramVec
+}
+
+func newMetrics() *metrics {
+	labels := []string{"method", "route", "status"}
+	m := &metrics{
+		registry: prometheus.NewRegistry(),
+		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "http_requests_total",
+			Help: "HTTP requests by method, route template, and status code.",
+		}, labels),
+		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "http_request_duration_seconds",
+			Help: "HTTP request latency by method, route template, and status code.",
+			// Covers the full /api/work delay range (up to 2 s).
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 2.5},
+		}, labels),
+	}
+	m.registry.MustRegister(
+		m.requests,
+		m.duration,
+		collectors.NewGoCollector(),
+		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+	)
+	return m
+}
+
+// instrument records every request handled by mux. It runs after mux has
+// matched, so r.Pattern holds the route template.
+func (m *metrics) instrument(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		mux.ServeHTTP(rec, r)
+
+		labels := prometheus.Labels{
+			"method": methodLabel(r.Method),
+			"route":  routeLabel(r.Pattern),
+			"status": strconv.Itoa(rec.status),
+		}
+		m.requests.With(labels).Inc()
+		m.duration.With(labels).Observe(time.Since(start).Seconds())
+	})
+}
+
+// routeLabel turns a matched pattern such as "GET /api/work" into
+// "/api/work". Unmatched requests (404, 405) have no pattern and become
+// "other", so raw paths never become label values.
+func routeLabel(pattern string) string {
+	if pattern == "" {
+		return "other"
+	}
+	if _, path, ok := strings.Cut(pattern, " "); ok {
+		return path
+	}
+	return pattern
+}
+
+// methodLabel keeps the method label bounded when clients send arbitrary
+// methods.
+func methodLabel(method string) string {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodOptions:
+		return method
+	}
+	return "other"
+}
+
+// statusRecorder captures the status code written by the wrapped handler.
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	if !r.wroteHeader {
+		r.status = status
+		r.wroteHeader = true
+	}
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
