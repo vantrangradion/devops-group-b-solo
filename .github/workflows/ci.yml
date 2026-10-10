@@ -7,7 +7,6 @@ on:
     paths-ignore:
       - "captures/**"
       - "docs/**"
-      - "NOTES.md"
   # No path filter, so required PR checks always report.
   pull_request:
     branches: [main]
