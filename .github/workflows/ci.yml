@@ -1,0 +1,90 @@
+# Lint -> Test -> Build & Push. PRs build the image but never push it.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "captures/**"
+      - "docs/**"
+  # No path filter, so required PR checks always report.
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  lint:
+    # Job names are the required status checks; keep them exact.
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+
+      # Must match GOLANGCI_LINT_VERSION in app/Makefile.
+      - uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.14.0
+          working-directory: app
+          args: --config .golangci.yml
+
+  test:
+    name: Test
+    needs: lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: app/go.mod
+          cache-dependency-path: app/go.sum
+
+      - run: go test ./...
+
+  build:
+    name: Build & Push
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Lowercases the owner and adds org.opencontainers.image.source.
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/devops-app
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # provenance: false keeps GHCR to one linux/amd64 entry.
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: app
+          platforms: linux/amd64
+          provenance: false
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
