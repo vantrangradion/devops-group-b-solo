@@ -1,0 +1,13 @@
+# Step 1 architecture audit: raw `uname -m` output from each member
+
+## Eng A (MacBook Pro 13-inch 2020, Intel Core i5-1038NG7)
+$ uname -m
+x86_64
+
+## Eng B (MacBook Pro 13-inch 2020, Intel Core i5-1038NG7)
+$ uname -m
+x86_64
+
+## Eng C (MacBook Pro 13-inch 2020, Intel Core i5-1038NG7)
+$ uname -m
+x86_64
