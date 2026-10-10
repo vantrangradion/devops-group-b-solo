@@ -1,0 +1,15 @@
+# Keep the build context to what the Dockerfile copies.
+.git
+.gitkeep
+.env
+.env.*
+*.pem
+*.key
+*.test
+*.out
+bin/
+Dockerfile
+.dockerignore
+.golangci.yml
+Makefile
+*_test.go
