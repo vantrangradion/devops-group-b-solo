@@ -1,0 +1,21 @@
+# Step 2 curl check: raw responses from /api/work and /metrics through the devops-app Service
+
+$ kubectl port-forward -n devops-app svc/devops-app 18080:8080
+Forwarding from 127.0.0.1:18080 -> 8080
+Forwarding from [::1]:18080 -> 8080
+
+$ curl -s -i http://localhost:18080/api/work
+HTTP/1.1 200 OK
+Content-Type: application/json
+Date: Mon, 12 Oct 2026 09:27:08 GMT
+Content-Length: 72
+
+{"message":"hello from configmap","app_env":"k3d","ms":50,"status":200}
+
+
+$ curl -s http://localhost:18080/metrics | grep http_requests_total
+# HELP http_requests_total HTTP requests by method, route template, and status code.
+# TYPE http_requests_total counter
+http_requests_total{method="GET",route="/api/work",status="200"} 3
+http_requests_total{method="GET",route="/health",status="200"} 640
+http_requests_total{method="GET",route="/metrics",status="200"} 2

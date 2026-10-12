@@ -1,0 +1,5 @@
+# Step 2 nodes: raw `kubectl get nodes -o wide` output from the devops-solo k3d cluster
+
+$ kubectl get nodes -o wide
+NAME                       STATUS   ROLES           AGE   VERSION        INTERNAL-IP   EXTERNAL-IP   OS-IMAGE           KERNEL-VERSION            CONTAINER-RUNTIME
+k3d-devops-solo-server-0   Ready    control-plane   56m   v1.36.5+k3s1   172.18.0.3    <none>        K3s v1.36.5+k3s1   7.0.14-linuxkit (amd64)   containerd://2.3.4-k3s1.36

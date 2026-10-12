@@ -1,0 +1,23 @@
+# Step 2 resources: raw `kubectl get` output for the devops-app namespace after `kubectl apply -k k8s/base/`
+
+$ kubectl get all -n devops-app
+NAME                              READY   STATUS    RESTARTS   AGE
+pod/devops-app-789bd564d6-67mjd   1/1     Running   0          35m
+pod/devops-app-789bd564d6-htxqg   1/1     Running   0          35m
+
+NAME                 TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)    AGE
+service/devops-app   ClusterIP   10.43.60.79   <none>        8080/TCP   6m10s
+
+NAME                         READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/devops-app   2/2     2            2           35m
+
+NAME                                    DESIRED   CURRENT   READY   AGE
+replicaset.apps/devops-app-789bd564d6   2         2         2       35m
+
+$ kubectl get configmap,secret -n devops-app
+NAME                         DATA   AGE
+configmap/devops-app         2      53m
+configmap/kube-root-ca.crt   1      53m
+
+NAME                TYPE     DATA   AGE
+secret/devops-app   Opaque   1      53m
