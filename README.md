@@ -55,6 +55,59 @@ kubectl get nodes
 
 The brief says k3d ships this provisioner as the `standard` StorageClass. On k3d it is named `local-path`. The app needs no PVC.
 
+## Deploy
+
+One command deploys the Namespace, ConfigMap, Secret, Deployment, and Service in `k8s/base/`:
+
+```sh
+kubectl apply -k k8s/base/
+```
+
+The deploy uses `-k` because `kubectl apply -f k8s/base/` applies files in file-name order, so `configmap.yaml` and `deployment.yaml` fail on a fresh cluster before `namespace.yaml` creates the namespace. `k8s/base/kustomization.yaml` only lists the five files, and kustomize applies the Namespace first.
+
+### Check
+
+Wait for both replicas, then confirm that the Service has 2 ready endpoints:
+
+```sh
+kubectl rollout status deployment/devops-app -n devops-app
+kubectl get deploy -n devops-app
+kubectl get endpointslices -n devops-app -l kubernetes.io/service-name=devops-app \
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]} {.conditions.ready}{"\n"}{end}'
+```
+
+Call the app through the Service. Local port `18080` is used because host port `8080` belongs to the k3d load balancer mapping:
+
+```sh
+kubectl port-forward -n devops-app svc/devops-app 18080:8080
+```
+
+In a second terminal:
+
+```sh
+curl -i http://localhost:18080/api/work
+curl -s http://localhost:18080/metrics | grep http_requests_total
+```
+
+| Check | Expected |
+| :--- | :--- |
+| `/api/work` | `200`, and the body contains `hello from configmap` (the ConfigMap's `MESSAGE`) |
+| `/metrics` | `http_requests_total` is present |
+
+Confirm that the cluster matches the manifests:
+
+```sh
+kubectl diff -k k8s/base/; echo "exit $?"
+```
+
+`kubectl diff` exits `0` when nothing would change. Running `kubectl apply -k k8s/base/` again reports `unchanged` for every object except the Secret, which always shows `configured`: `stringData` is write-only and never stored, so each apply re-sends it.
+
+### Delete
+
+```sh
+kubectl delete -k k8s/base/
+```
+
 ## App contract
 
 Agreed by the team at kickoff. All three personal builds expose this same interface, so Pillar 2 manifests and Pillar 3 dashboards work on any of the three images.
