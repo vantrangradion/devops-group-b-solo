@@ -29,6 +29,32 @@ Pinned versions, agreed by the team at kickoff. Local builds, the Dockerfile, an
 
 golangci-lint `v2.14.0` is built with Go 1.27, so it can lint a module whose `go` directive is `1.27.x`.
 
+## Cluster
+
+Pillar 2 runs on a local k3d cluster (k3d `v5.9.0`, k3s `v1.36.5`) with a single server and no agents:
+
+```sh
+k3d cluster create devops-solo -p "8080:8080@loadbalancer"
+```
+
+The port mapping sends host port `8080` to a second Service of type `LoadBalancer` on port `8080`, which the Remote access path uses. Host port `8080` is therefore taken while the cluster runs.
+
+Check that every node is `Ready`:
+
+```sh
+kubectl get nodes
+```
+
+### Storage
+
+`kubectl get storageclass` lists one class:
+
+| Name | Provisioner | Default | Access mode |
+| :--- | :--- | :--- | :--- |
+| `local-path` | `rancher.io/local-path` | yes | `ReadWriteOnce` only |
+
+The brief says k3d ships this provisioner as the `standard` StorageClass. On k3d it is named `local-path`. The app needs no PVC.
+
 ## App contract
 
 Agreed by the team at kickoff. All three personal builds expose this same interface, so Pillar 2 manifests and Pillar 3 dashboards work on any of the three images.
