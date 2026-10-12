@@ -62,7 +62,7 @@ The team consists of 3 engineers. To ensure balanced workloads and clear account
 | Role                                           | Lead Engineer  | Primary PoW Deliverables                                                                                                                                                                                 | Research Topics Owned                                                                                                                                                                                                                        | Recommended Target Bonuses                                                                         |
 | :--------------------------------------------- | :------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------- |
 | **Pillar 1: CI/CD & Container Security**       | **Engineer A** | **Step 1:** Toy App API, Distroless `Dockerfile`, GitHub Actions workflow to `ghcr.io`, native `amd64` build + architecture audit write-up.                                                              | **3.1a:** CI/CD Fundamentals, GitHub Actions, Immutable Actions, Artifact Attestations, Jenkins/GitLab comparison.<br>**3.1c:** Containers, Distroless/minimal base, SBOM, Trivy/Grype scan, Docker Hardened Images.                         | **Bonus 4:** SBOM generation & SLSA build attestation.                                             |
-| **Pillar 2: K8s Infrastructure & Network**     | **Engineer B** | **Step 2:** Local K8s cluster (k3d/kind), dedicated app namespace, Deployment, Service, ConfigMap/Secret injection.<br>**Step 3:** Remote Tunnel (`cloudflared` or `ngrok`), mobile device verification. | **3.1b:** GitOps models (Push vs. Pull), Argo CD vs. Flux, image tag lifecycle, Remote access comparison.<br>**3.1d:** Kubernetes orchestration core, Pod/Deployment/Service/PVC, RWO limits, single vs. multi-node.                         | **Bonus 1:** GitOps automated sync (Argo CD or Flux) _or_ **Bonus 2:** Multi-node cluster.         |
+| **Pillar 2: K8s Infrastructure & Network**     | **Engineer B** | **Step 2:** Local K8s cluster (k3d/kind), dedicated app namespace, Deployment, Service, ConfigMap/Secret injection.<br>**Step 3:** Remote Tunnel (`cloudflared` or `ngrok`), mobile device verification. | **3.1b:** GitOps models (Push vs. Pull), Argo CD vs. Flux, image tag lifecycle, Remote access comparison.<br>**3.1d:** Kubernetes orchestration core, Pod/Deployment/Service/PVC, RWO limits, single vs. multi-node.                         | **Bonus 1:** GitOps sync, manual and automatic (Argo CD or Flux) _or_ **Bonus 2:** Multi-machine cluster. |
 | **Pillar 3: Observability & Performance Demo** | **Engineer C** | **Step 4:** App instrumentation (RED metrics), `kube-prometheus-stack` deployment, custom Grafana dashboard (RED + Pod CPU/Mem).<br>**Step 5:** `k6` load testing script, live demo execution lead.      | **3.1e:** OpenTelemetry (traces/metrics/logs maturity), OTel Collector, SemConv, Prometheus scraping, PromQL, k6.<br>**3.1f:** RUM vs. Synthetic, Browser Performance APIs, Core Web Vitals, CrUX vs. DevTools, OTel Web SDK, Server-Timing. | **Bonus 7:** End-to-end pipeline diagram (team-wide).<br>**Bonus 8:** Real Core Web Vital capture. |
 
 ### 2.2 RACI Matrix
@@ -110,7 +110,7 @@ Assignment-3/
 │   ├── base/
 │   │   ├── namespace.yaml    # Namespace: devops-app
 │   │   ├── configmap.yaml    # App configuration (e.g. APP_ENV, MESSAGE)
-│   │   ├── secret.yaml       # Sensitive setting (base64 encoded)
+│   │   ├── secret.yaml       # Placeholder API_KEY under stringData (gitleaks flags base64 data:)
 │   │   ├── deployment.yaml   # 2 replicas, resource requests/limits, liveness/readiness probes
 │   │   └── service.yaml      # ClusterIP service on port 8080
 │   └── monitoring/           # Owned by Eng C
@@ -148,7 +148,7 @@ Assignment-3/
      - `GET /api/work` (computational delay parameter for demonstrating latency in Grafana during load test)
      - `GET /metrics` (Prometheus exposition format)
 2. **Cluster Tool: `k3d` (Docker-backed k3s) or `kind`**
-   - _Recommendation:_ **k3d**. Extremely fast boot, runs inside Docker, uses standard `rancher.io/local-path` provisioner, and allows adding worker nodes in seconds (`k3d cluster create --servers 1 --agents 2`) which effortlessly unlocks **Bonus 2**.
+   - _Recommendation:_ **k3d**. Extremely fast boot, runs inside Docker, uses standard `rancher.io/local-path` provisioner, and allows adding worker nodes in seconds (`k3d cluster create --servers 1 --agents 2`) to show scheduling across nodes. Those nodes all run on one laptop, so they do not count for **Bonus 2**, which needs nodes on separate machines (k3s is the easiest path there).
 3. **Tunneling Tool: Cloudflare Tunnel (`cloudflared`) or `ngrok`**
    - _Recommendation:_ **cloudflared** or **ngrok** (Free tier). Run `ngrok http 8080` (or `cloudflared tunnel`) pointing directly to the exposed Service via `kubectl port-forward` or NodePort.
 4. **Monitoring Stack: `kube-prometheus-stack` (Helm)**
@@ -278,9 +278,9 @@ Research drafting (Section 2 topic ownership) continues in parallel at **~1 hour
 - **09:00–10:15 — ★ CP1 (CI/CD & Container Security):** Everyone tags their personal `main` `cp1`. Run the session format from Section 4.1. Eng A decides on `app/`, `Dockerfile`, and `ci.yml`.
 - **10:15–11:30 — Merge:** Eng A copies the chosen files into a branch of the team repo and opens the PR (tree, `app/`, `ci.yml`, `README.md`, `docs/01-ci-cd-gh-actions.md`, decision record). The others review. CI goes green on `main` and pushes the official image (`:<sha>`, `:latest`). Eng A sets the package to Public, then commits the graded Step 1 captures from that `main` run (`step-1-ci-run.png`, `step-1-ghcr-image.png`, `step-1-arch-audit.txt`). CI skips pushes that only touch `captures/` or `docs/`, so no new image is built. Only then does Eng A turn on branch protection for `main` (2 approvals, required `Lint`, `Test`, `Security`, and `Build` checks, no admin bypass).
 - **11:30–13:00 — Switch to official image:** Each person points their Pillar 2 Deployment at the official image (`ghcr.io/<org>/devops-app:<sha>` of the CP1 merge commit, or of a fix PR's merge commit if one has landed since) and confirms `curl` still works, so CP2 compares like for like.
-- **13:00–14:15 — ★ CP2 (K8s Infrastructure & Network):** Everyone tags their `p2` branch `cp2`. Eng B decides on `k8s/base/*` and the tunnel approach. In the last 5 minutes, **Eng C** shares the known Pillar 3 pitfalls (risk **R3**: `release` label on the `ServiceMonitor`, named Service port, `namespaceSelector`).
+- **13:00–14:15 — ★ CP2 (K8s Infrastructure & Network):** Everyone tags their `p2` branch `cp2`. Eng B decides on `k8s/base/*`, the tunnel approach, and the **demo host laptop** (the one with the most free RAM), so all three go into the decision record. In the last 5 minutes, **Eng C** shares the known Pillar 3 pitfalls (risk **R3**: `release` label on the `ServiceMonitor`, named Service port, `namespaceSelector`).
 - **14:15–16:00 — Merge:** Eng B copies the chosen files from the personal repos into a branch of the team repo and opens the PR. The others review, then merge to `main`.
-- **16:00–17:00 — Shared cluster, part 1:** Pick the **demo host laptop** (the one with the most free RAM). Create `k3d cluster create devops-shared` from `main`, deploy, and open the tunnel. Take the graded Step 2–3 captures (`step-2-*`, `step-3-tunnel-phone-access.png`). Keep this cluster running until the demo.
+- **16:00–17:00 — Shared cluster, part 1:** On the demo host chosen at CP2, create `k3d cluster create devops-shared` from `main`, deploy, and open the tunnel. Take the graded Step 2–3 captures (`step-2-*`, `step-3-tunnel-phone-access.png`) and open the captures PR, which merges by end of day. Keep this cluster running until the demo.
 - **From 16:00:** All create `p3` in their personal repo from the team repo's `main` (`git fetch upstream`, then branch from `upstream/main`), or rebase work-ahead onto it, re-apply `k8s/base/` on their own cluster, and continue Step 4.
 - **Slides:** Create the Midway Deck skeleton (slide list in Day 6). Owners of Pillars 1–2 fill in their step slides using the real captures.
 
@@ -337,7 +337,7 @@ flowchart TD
     subgraph Stream2["Stream 2: High-Leverage Bonuses (Tie-Breakers)"]
         B1["Bonus 7: Full Pipeline Architecture Diagram (All)"]
         B2["Bonus 4: SBOM & Build Attestation in GH Actions (Eng A)"]
-        B3["Bonus 1: Argo CD / Flux GitOps Automated Deploy (Eng B)"]
+        B3["Bonus 1: Argo CD / Flux GitOps Deploy, Manual & Auto Sync (Eng B)"]
         B4["Bonus 8: Real Core Web Vital Capture with web-vitals (Eng C)"]
     end
 
@@ -361,7 +361,7 @@ flowchart TD
   - **Bonus 4:** SBOM generation (`anchore/sbom-action`), cosign signing, and provenance and SBOM attestations (`actions/attest`) are in `ci.yml` from CP1. Sprint 2 adds the write-up and a `gh attestation verify` capture.
 - **Eng B:**
   - Research write-up for 3.1b and 3.1d. Deep-dive into GitOps reconciliation loops, push vs pull trade-offs, and Kubernetes storage architecture (explain why local RWO fails for multi-pod writes).
-  - Implement **Bonus 1:** Deploy Argo CD in the cluster, configure an `Application` CRD pointing to the git manifest repo, and demonstrate automated sync upon commit.
+  - Implement **Bonus 1:** Deploy Argo CD in the cluster and configure an `Application` CRD pointing to the git manifest repo. Show one full loop (commit an image tag or replica change → sync → new pods roll out) once with manual sync and once with automatic sync, capturing before and after plus the sync in the Argo CD UI or CLI, and state which one the team would pick for a real team. CI's `paths-ignore` covers only `captures/**` and `docs/**`, so a commit that only changes `k8s/` builds and publishes a new image. Before any tool commits image-tag bumps to `main`, add `k8s/**` to `paths-ignore`; otherwise each bump publishes a new image, which triggers the next bump.
 - **Eng C:**
   - Research write-up for 3.1e and 3.1f. Check live OpenTelemetry signal status table (`https://opentelemetry.io/status/`) and Collector changelog.
   - Implement **Bonus 7:** Create a comprehensive, production-grade architectural diagram of the complete pipeline using Mermaid / Excalidraw.
