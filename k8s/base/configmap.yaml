@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: devops-app
+  namespace: devops-app
+  labels:
+    app.kubernetes.io/name: devops-app
+data:
+  APP_ENV: dev
+  # Differs from the image default ("hello from devops-app"), so a curl shows
+  # the ConfigMap was used.
+  MESSAGE: hello from configmap
