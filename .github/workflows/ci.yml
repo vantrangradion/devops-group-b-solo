@@ -14,8 +14,10 @@ on:
   pull_request:
     branches: [main]
 
-# A new commit cancels the PR run it replaces. Pushes to main always finish,
-# so a publish is never cut off halfway.
+# A new commit cancels the PR run it replaces. A running main run always
+# finishes, so a publish is never cut off halfway. Main runs are serialized so
+# :latest never moves back to an older commit; GitHub keeps only the newest
+# pending run, so a commit queued behind it gets no :<sha> image.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
