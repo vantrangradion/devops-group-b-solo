@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-app
+  namespace: devops-app
+  labels:
+    app.kubernetes.io/name: devops-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: devops-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: devops-app
+    spec:
+      # The app never calls the Kubernetes API.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: devops-app
+          image: ghcr.io/vantrangradion/devops-app:64bf198e3cfa3f70c1c432ffffe7852c4735ecb0
+          ports:
+            - name: http
+              containerPort: 8080
+          # Explicit keyRefs, not envFrom: a missing key fails the pod start
+          # instead of silently falling back to the image default.
+          env:
+            - name: APP_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: devops-app
+                  key: APP_ENV
+            - name: MESSAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: devops-app
+                  key: MESSAGE
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: devops-app
+                  key: API_KEY
+          # The first probe otherwise races the listener and logs a refused
+          # connection on every start.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Measured per pod: idle 1m/5Mi, k6 100 VUs (~1.7k rps) ~530m/15Mi; limits leave ~2x CPU, ~8x memory for Pillar 3.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 32Mi
+            limits:
+              cpu: "1"
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
