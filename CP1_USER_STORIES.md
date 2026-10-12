@@ -152,7 +152,7 @@ Criteria that describe behavior are written as **Given / When / Then** scenarios
 **Acceptance criteria**
 - [ ] `app/main_test.go` uses `httptest` to cover at least `/health` (200), `/api/work` (returns `MESSAGE`, `fail=1` returns `500`, non-integer `ms` returns `400`), and `/metrics` (counter increments).
 - [ ] The `Makefile` and CI use the same pinned `golangci-lint` version and the same config file (`app/.golangci.yml`).
-- [ ] **Given** a clone of my personal repo, **when** I run `make lint`, `make test`, or `make build` in `app/`, **then** each runs with that one command, and `make build` produces the Docker image.
+- [ ] **Given** a clone of my personal repo, **when** I run `make lint`, `make test`, `make build`, or `make smoke` in `app/`, **then** each runs with that one command, `make build` produces the Docker image, and `make smoke` starts that image and checks `/health` and `/metrics` (CI runs the same target).
 - [ ] **Given** the code on `main`, **when** I run `go test ./...` in `app/`, **then** all tests pass.
 - [ ] **Given** the code on `main`, **when** I run `golangci-lint run` in `app/`, **then** it reports zero issues.
 
@@ -172,25 +172,37 @@ Criteria that describe behavior are written as **Given / When / Then** scenarios
 - [ ] **Given** the built image, **when** I run `docker run -p 8080:8080 <img>`, **then** the CP1-05 checks pass.
 
 #### CP1-09: Personal CI pipeline to GHCR
-**As a** Solo Builder, **I want** every push to my repo to lint, test, build, and publish my image **so that** I have my own image to deploy in Pillar 2 over the weekend.
+**As a** Solo Builder, **I want** every push to my repo to check, build, verify, and publish my image **so that** I have my own image to deploy in Pillar 2 over the weekend.
 
 **Acceptance criteria**
-- [ ] The workflow sets `permissions: packages: write, contents: read` and logs in to `ghcr.io` with `GITHUB_TOKEN`. No personal tokens are stored.
-- [ ] Triggers: `push` to `main` with `paths-ignore: [captures/**, docs/**]`, and `pull_request` to `main` with no path filter, so required PR checks always report.
+- [ ] The workflow defaults to `permissions: contents: read`. Only `Publish` adds `packages: write` (GHCR push), `id-token: write` (keyless signing), and `attestations: write`. It logs in to `ghcr.io` with `GITHUB_TOKEN`. No personal tokens are stored.
+- [ ] Triggers: `push` to `main` with `paths-ignore: [captures/**, docs/**]`, `push` of `v*` release tags, and `pull_request` to `main` with no path filter, so required PR checks always report.
+- [ ] A new commit cancels the PR run it replaces (`concurrency` with `cancel-in-progress` on pull requests only). Runs on `main` are never cancelled, so a publish is never cut off halfway.
 - [ ] The image path is `ghcr.io/<owner>/devops-app`, with the owner taken from `github.repository_owner` and lowercased by `docker/metadata-action` or a shell step (GitHub expressions have no `lower()` function). The same file then works unchanged in the team repo if my `ci.yml` is chosen.
 - [ ] The `:<sha>` tag is the full 40-character commit SHA (`${{ github.sha }}`), with no `sha-` prefix and no short form, so Pillar 2 manifests can be written from the commit alone.
 - [ ] The image carries the `org.opencontainers.image.source` label with the repo URL (`docker/metadata-action` adds it), so the GHCR package links to its repo.
-- [ ] The build step sets `platforms: linux/amd64` and `provenance: false`, so GHCR lists only the `linux/amd64` image and no extra `unknown/unknown` entry. Provenance attestations come back with Bonus 4 in Sprint 2.
-- [ ] Third-party actions are pinned to a version tag or a commit SHA.
+- [ ] The build step sets `platforms: linux/amd64` and `provenance: false`, so the image itself is a single `linux/amd64` manifest. Provenance is attested separately after the push (see below). GHCR also lists untagged entries for the cosign signature and the attestations; this is expected.
+- [ ] Every action is pinned to a full commit SHA, with its version in a trailing comment (`@<sha> # v1.2.3`), because a version tag can be moved to new code. Container images run in CI are pinned by digest.
 - [ ] After the first successful push, I set the GHCR package visibility to **Public** (new packages start private).
 - [ ] The repo has progressive commits (several focused commits, not one dump), per risk **R6**.
 - [ ] The first engineer to get a GHCR push working posts the working `permissions` and login snippet in the team chat, so the others don't repeat the same permission debugging.
-- [ ] The three jobs are named exactly `Lint`, `Test`, and `Build & Push` (their `name:` fields), with no matrix, which would add suffixes. These are the required check names in CP1-11; any other name never reports and blocks every PR once branch protection is on.
-- [ ] **Given** a workflow run, **when** I view its jobs, **then** the stages run in this order: **Lint** (`golangci-lint`) → **Test** (`go test ./...`) → **Build & Push**, and Build & Push runs only if both earlier stages pass.
-- [ ] **Given** a pull request to `main`, **when** CI runs, **then** lint, test, and the image build run, but nothing is pushed to GHCR (`push: false`).
-- [ ] **Given** a push to `main` in my personal repo, **when** CI runs, **then** all stages pass and `ghcr.io/<github-user>/devops-app` gets the tags `:<sha>` and `:latest`.
+- [ ] The five jobs are named exactly `Lint`, `Test`, `Security`, `Build`, and `Publish` (their `name:` fields), with no matrix, which would add suffixes. The first four are the required check names in CP1-11; any other name never reports and blocks every PR once branch protection is on. `Publish` is not required: it is skipped on every PR, and a skipped required check counts as passing, so requiring it would protect nothing.
+- [ ] **Given** a workflow run, **when** I view its jobs, **then** the fast checks run in parallel, Build runs only if all three pass, and Publish runs only if Build passes:
+  - **Lint**: `golangci-lint`;
+  - **Test**: `go test ./...`;
+  - **Security**: `gitleaks` over the full git history, and a Trivy dependency audit (`trivy fs`) that fails on fixable `HIGH` or `CRITICAL` findings.
+- [ ] **Given** a workflow run, **when** Build runs, **then** it builds the image once and verifies that exact image before anything is pushed:
+  - the build is loaded into the runner's Docker daemon (`load: true`) and uses the GitHub Actions build cache;
+  - `make smoke` starts the container and checks `/health` and `/metrics`;
+  - a Trivy image scan fails on fixable `HIGH` or `CRITICAL` findings;
+  - an SPDX SBOM is generated and kept as a workflow artifact.
+- [ ] **Given** a push to `main` or a `v*` tag, **when** the checks pass, **then** Build saves the verified image as a workflow artifact (kept 1 day). Publish loads it, fails unless its image ID matches the one Build verified, then pushes that image (no rebuild), signs it by digest with keyless cosign, and attaches build provenance and the SBOM as attestations in GHCR.
+- [ ] **Given** a pull request to `main`, **when** CI runs, **then** every check, the build, the smoke test, the scan, and the SBOM run, but Publish is skipped: nothing is pushed, signed, or attested.
+- [ ] **Given** a push to `main` in my personal repo, **when** CI runs, **then** all stages pass and `ghcr.io/<github-user>/devops-app` gets the tags `:<sha>` and `:latest`. `gh attestation verify oci://ghcr.io/<github-user>/devops-app:<sha> --owner <github-user>` succeeds.
+- [ ] **Given** a push of tag `v1.2.3`, **when** CI runs, **then** the image also gets the tag `:1.2.3`, and `:latest` is not moved.
 - [ ] **Given** a push to `main` that only changes `captures/` or `docs/`, **when** it lands, **then** CI does not run and no new image is published.
-- [ ] **Given** a failing test, **when** I push, **then** the pipeline stops before Build & Push and nothing is published.
+- [ ] **Given** a failing test, **when** I push, **then** the pipeline stops before Build and nothing is published.
+- [ ] **Given** an image that fails the smoke test, or has a fixable `HIGH` or `CRITICAL` vulnerability, **when** CI runs, **then** Build fails, Publish never runs, and nothing is published.
 - [ ] **Given** my image in GHCR, **when** my Pillar 2 cluster pulls it without credentials, **then** the pull succeeds because the package is public.
 
 #### CP1-10: Pillar 1 learning notes
@@ -224,7 +236,7 @@ Criteria that describe behavior are written as **Given / When / Then** scenarios
 - [ ] CI is green on the PR (build only, nothing pushed) and on the merge commit to `main` (build and push).
 - [ ] Once the CP1-13 captures are committed, Eng A turns on branch protection for `main`, ready for CP2 and CP3:
   - require a pull request with 2 approvals;
-  - require the status checks `Lint`, `Test`, and `Build & Push` (the CI job names, selectable because they ran on this PR);
+  - require the status checks `Lint`, `Test`, `Security`, and `Build` (the CI job names, selectable because they ran on this PR);
   - turn on "Do not allow bypassing the above settings", so admins (including Eng A) are bound too.
 - [ ] **Given** branch protection is on, **when** Eng A (an admin) tries a direct push to `main`, **then** the push is rejected.
 - [ ] **Given** branch protection is on, **when** a PR's `Test` check fails, **then** the merge button stays blocked.
@@ -307,6 +319,4 @@ The session follows Plan Section 4.1 and is run by Eng A as Pillar Owner. A time
 
 - Kubernetes manifests, the tunnel, and the cluster (CP2). The one exception is CP1-14, which only switches an existing Pillar 2 Deployment to the official image.
 - Prometheus, Grafana, and k6 (CP3). CP1 only guarantees the `/metrics` contract.
-- SBOM generation, SLSA attestations, and image signing (Bonus 4, Sprint 2).
-- Non-blocking image vulnerability scan in CI (Trivy or Grype, report only, `exit-code: 0`). Bonus 4 and 3.1c head start: picked up only if CP1-13 is done with time to spare, otherwise Sprint 2.
 - Multi-arch builds (`linux/arm64`). Deferred to a Sprint 2 stretch.

@@ -105,7 +105,7 @@ Assignment-3/
 │   └── Makefile              # Local test, lint, build commands
 ├── .github/
 │   └── workflows/
-│       └── ci.yml            # GitHub Actions: Lint -> Test -> Docker Build (amd64 native) -> ghcr.io
+│       └── ci.yml            # GitHub Actions: Lint + Test + Security -> Build (amd64 native; smoke, scan, SBOM) -> Publish (push, sign, attest to ghcr.io)
 ├── k8s/                      # Owned by Eng B
 │   ├── base/
 │   │   ├── namespace.yaml    # Namespace: devops-app
@@ -213,7 +213,7 @@ flowchart LR
 - The pillar owner copies the chosen files from the personal repos onto a branch in the team repo and opens **one focused PR** into `main`. The other two review it. CI must be green on `main`.
 - The official captures for that pillar are taken from `main` / the shared cluster (see Section 4.4).
 - Everyone starts their next pillar from the team repo's updated `main` (see Section 4.2, rule 1).
-- From the end of the CP1 merge on, `main` is protected (2 approvals, required `Lint`, `Test`, and `Build & Push` checks, no admin bypass). Graded captures, docs, and fixes for CP2, CP3, and later all reach `main` through a PR. Only the CP1 captures are committed directly, before protection is turned on. PRs are merged with merge commits only.
+- From the end of the CP1 merge on, `main` is protected (2 approvals, required `Lint`, `Test`, `Security`, and `Build` checks, no admin bypass). Graded captures, docs, and fixes for CP2, CP3, and later all reach `main` through a PR. Only the CP1 captures are committed directly, before protection is turned on. PRs are merged with merge commits only.
 
 ### 4.2 Ground Rules for the Individual Phase
 
@@ -224,7 +224,7 @@ flowchart LR
 
    The team repo is created empty on Day 1, owned by a GitHub organization, and receives only checkpoint PRs. Nobody pushes solo work to it. Keep your personal repo public, and do not delete its branches or checkpoint tags. They are the evidence of individual work (risks **R6**, **R8**).
 2. **Same layout in every repo:** each personal repo uses the canonical layout from Section 3 (`app/`, `k8s/`, `load-tests/`, `.github/workflows/ci.yml`). The Docker build context is `app/`, and CI runs the Go steps with `working-directory: app`. Personal repos are never merged wholesale. The pillar owner brings the chosen files into the team repo's `main` through the checkpoint PR.
-3. **Image names:** each repo's CI pushes to `ghcr.io/<owner>/devops-app` on pushes to `main`, tagged with the full commit SHA and `:latest`. Pull requests build but never push. Builds set `platforms: linux/amd64` and `provenance: false` (attestations return with Bonus 4). The CI jobs are named exactly `Lint`, `Test`, and `Build & Push`, because branch protection requires those check names.
+3. **Image names:** each repo's CI pushes to `ghcr.io/<owner>/devops-app` on pushes to `main`, tagged with the full commit SHA and `:latest`; `v*` release tags also publish. Pull requests build, smoke-test, and scan the image but never push. Builds set `platforms: linux/amd64` and `provenance: false`; pushed images are then signed with cosign and get provenance and SBOM attestations (Bonus 4). The CI jobs are named exactly `Lint`, `Test`, `Security`, `Build`, and `Publish`; branch protection requires the first four check names (`Publish` is skipped on PRs, so it is not required).
    - Personal builds go to `ghcr.io/<github-user>/devops-app`, so they never overwrite each other.
    - The official image goes to `ghcr.io/<org>/devops-app`. Because the team repo is owned by an org, it never collides with Eng A's personal package.
    - New GHCR packages start private. Set each one to **Public** after its first push, so clusters can pull without credentials.
@@ -276,7 +276,7 @@ Research drafting (Section 2 topic ownership) continues in parallel at **~1 hour
 #### **Day 4: Mon 12 Oct (★ CP1 + ★ CP2, then Pillar 3 solo)**
 
 - **09:00–10:15 — ★ CP1 (CI/CD & Container Security):** Everyone tags their personal `main` `cp1`. Run the session format from Section 4.1. Eng A decides on `app/`, `Dockerfile`, and `ci.yml`.
-- **10:15–11:30 — Merge:** Eng A copies the chosen files into a branch of the team repo and opens the PR (tree, `app/`, `ci.yml`, `README.md`, `docs/01-ci-cd-gh-actions.md`, decision record). The others review. CI goes green on `main` and pushes the official image (`:<sha>`, `:latest`). Eng A sets the package to Public, then commits the graded Step 1 captures from that `main` run (`step-1-ci-run.png`, `step-1-ghcr-image.png`, `step-1-arch-audit.txt`). CI skips pushes that only touch `captures/` or `docs/`, so no new image is built. Only then does Eng A turn on branch protection for `main` (2 approvals, required `Lint`, `Test`, and `Build & Push` checks, no admin bypass).
+- **10:15–11:30 — Merge:** Eng A copies the chosen files into a branch of the team repo and opens the PR (tree, `app/`, `ci.yml`, `README.md`, `docs/01-ci-cd-gh-actions.md`, decision record). The others review. CI goes green on `main` and pushes the official image (`:<sha>`, `:latest`). Eng A sets the package to Public, then commits the graded Step 1 captures from that `main` run (`step-1-ci-run.png`, `step-1-ghcr-image.png`, `step-1-arch-audit.txt`). CI skips pushes that only touch `captures/` or `docs/`, so no new image is built. Only then does Eng A turn on branch protection for `main` (2 approvals, required `Lint`, `Test`, `Security`, and `Build` checks, no admin bypass).
 - **11:30–13:00 — Switch to official image:** Each person points their Pillar 2 Deployment at the official image (`ghcr.io/<org>/devops-app:<sha>` of the CP1 merge commit, or of a fix PR's merge commit if one has landed since) and confirms `curl` still works, so CP2 compares like for like.
 - **13:00–14:15 — ★ CP2 (K8s Infrastructure & Network):** Everyone tags their `p2` branch `cp2`. Eng B decides on `k8s/base/*` and the tunnel approach. In the last 5 minutes, **Eng C** shares the known Pillar 3 pitfalls (risk **R3**: `release` label on the `ServiceMonitor`, named Service port, `namespaceSelector`).
 - **14:15–16:00 — Merge:** Eng B copies the chosen files from the personal repos into a branch of the team repo and opens the PR. The others review, then merge to `main`.
@@ -358,7 +358,7 @@ flowchart TD
 
 - **Eng A:**
   - Research write-up for 3.1a and 3.1c. Verify current rollout status of GitHub Immutable Actions (`https://github.blog/changelog/`) and Artifact Attestations (`actions/attest-build-provenance`).
-  - Implement **Bonus 4:** Add `docker buildx build --sbom=true` (or `syft` / `trivy`) and GitHub artifact attestation step to the CI workflow.
+  - **Bonus 4:** SBOM generation (`anchore/sbom-action`), cosign signing, and provenance and SBOM attestations (`actions/attest`) are in `ci.yml` from CP1. Sprint 2 adds the write-up and a `gh attestation verify` capture.
 - **Eng B:**
   - Research write-up for 3.1b and 3.1d. Deep-dive into GitOps reconciliation loops, push vs pull trade-offs, and Kubernetes storage architecture (explain why local RWO fails for multi-pod writes).
   - Implement **Bonus 1:** Deploy Argo CD in the cluster, configure an `Application` CRD pointing to the git manifest repo, and demonstrate automated sync upon commit.
