@@ -11,7 +11,7 @@ Personal solo repo for the Group B DevOps & Observability Research assignment. I
 ```
 app/                  Go service, Dockerfile, Makefile, lint config (Docker build context)
 .github/workflows/    CI (Go and lint steps run with working-directory: app)
-k8s/base/             Namespace, Deployment, Service, ConfigMap, Secret
+k8s/base/             Namespace, Deployment, Service, ConfigMap, Secret, kustomization
 k8s/monitoring/       kube-prometheus-stack values, ServiceMonitor
 load-tests/           k6 scripts
 docs/                 Research write-ups
