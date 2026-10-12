@@ -5,8 +5,8 @@ metadata:
   namespace: devops-app
   labels:
     app.kubernetes.io/name: devops-app
+# Both values differ from the image defaults ("dev", "hello from devops-app"),
+# so a curl shows the ConfigMap was used.
 data:
-  APP_ENV: dev
-  # Differs from the image default ("hello from devops-app"), so a curl shows
-  # the ConfigMap was used.
+  APP_ENV: k3d
   MESSAGE: hello from configmap
