@@ -71,6 +71,13 @@ spec:
             limits:
               cpu: "1"
               memory: 128Mi
+          # The app closes its listener on SIGTERM; keep serving while the
+          # endpoint removal reaches kube-proxy. The default 30 s grace period
+          # covers this sleep plus the app's 10 s drain.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
