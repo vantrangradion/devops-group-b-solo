@@ -57,13 +57,13 @@ The brief says k3d ships this provisioner as the `standard` StorageClass. On k3d
 
 ## Deploy
 
-One command deploys the Namespace, ConfigMap, Secret, Deployment, and Service in `k8s/base/`:
+One command deploys the Namespace, ConfigMap, Secret, Deployment, ClusterIP Service, and LoadBalancer Service in `k8s/base/`:
 
 ```sh
 kubectl apply -k k8s/base/
 ```
 
-The deploy uses `-k` because `kubectl apply -f k8s/base/` applies files in file-name order, so `configmap.yaml` and `deployment.yaml` fail on a fresh cluster before `namespace.yaml` creates the namespace. `k8s/base/kustomization.yaml` only lists the five files, and kustomize applies the Namespace first.
+The deploy uses `-k` because `kubectl apply -f k8s/base/` applies files in file-name order, so `configmap.yaml` and `deployment.yaml` fail on a fresh cluster before `namespace.yaml` creates the namespace. `k8s/base/kustomization.yaml` only lists the six files, and kustomize applies the Namespace first.
 
 ### Check
 
@@ -107,6 +107,64 @@ kubectl diff -k k8s/base/; echo "exit $?"
 ```sh
 kubectl delete -k k8s/base/
 ```
+
+## Remote access
+
+A phone on mobile data reaches the app through a `cloudflared` quick tunnel. It needs no account, token, or config file, so nothing tunnel-related is committed. The path is:
+
+```
+phone → https://<random>.trycloudflare.com → cloudflared on the host → localhost:8080
+      → k3d load balancer → Service devops-app-lb (LoadBalancer, port 8080) → both pods
+```
+
+1. Create the cluster with the port mapping from [Cluster](#cluster) (`-p "8080:8080@loadbalancer"`).
+2. Deploy with `kubectl apply -k k8s/base/` (see [Deploy](#deploy)). It also creates `k8s/base/service-lb.yaml`, the Service `devops-app-lb` of type `LoadBalancer` on port `8080`. It sits next to the ClusterIP Service `devops-app` and selects the same pods. It does not use port 80 or 443, because the Traefik LoadBalancer that k3s installs owns those ports.
+3. Check the host path. The `EXTERNAL-IP` of `devops-app-lb` must be an address, not `<pending>`:
+
+   ```sh
+   kubectl get svc -n devops-app
+   curl -i http://localhost:8080/api/work
+   ```
+
+4. Start the tunnel:
+
+   ```sh
+   cloudflared tunnel --url http://localhost:8080
+   ```
+
+   The public URL is printed in the log box (`Your quick Tunnel has been created! Visit it at ...`), in the form `https://<random>.trycloudflare.com`. To run it in the background, redirect the output to a file and read the URL from it:
+
+   ```sh
+   nohup cloudflared tunnel --url http://localhost:8080 > /tmp/cloudflared.log 2>&1 &
+   grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cloudflared.log
+   ```
+
+5. Check from the host with `curl -i <url>/api/work` and `curl -i <url>/health`.
+
+### Phone check
+
+Turn Wi-Fi off on the phone so it uses mobile data only, then open:
+
+| URL | Expected |
+| :--- | :--- |
+| `<url>/api/work` | The body contains `hello from configmap` (the ConfigMap's `MESSAGE`) |
+| `<url>/health` | `200`, body `{"status":"ok"}` |
+
+### Why a port mapping and not `kubectl port-forward`
+
+`kubectl port-forward svc/devops-app 8080:8080` would also give the tunnel a local port, but:
+
+- it sends every connection to a single pod, so traffic is not spread across both replicas;
+- it stops when its terminal closes;
+- it exits whenever that pod is deleted or restarted (a liveness restart, a rollout), which silently breaks the tunnel.
+
+The k3d port mapping goes through the LoadBalancer Service, so it spreads traffic across both replicas and survives pod restarts. Its cost is that it is easiest to set when the cluster is created: `k3d cluster edit --port-add` can add it later, but that command is experimental.
+
+### Demo-day notes
+
+- A quick tunnel gets a new `trycloudflare.com` URL every time `cloudflared` starts. After any restart, read the new URL from the output and share it again.
+- The public URL exposes every route, including `/metrics`. That is acceptable for a demo of a toy app, but the tunnel runs only while it is needed.
+- Stop the tunnel with `Ctrl+C` in its terminal, or `pkill -f "cloudflared tunnel"` if it runs in the background. The URL stops working at once.
 
 ## App contract
 
