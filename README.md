@@ -163,6 +163,7 @@ The k3d port mapping goes through the LoadBalancer Service, so it spreads traffi
 ### Demo-day notes
 
 - A quick tunnel gets a new `trycloudflare.com` URL every time `cloudflared` starts. After any restart, read the new URL from the output and share it again.
+- On macOS, `curl` on the host can fail with `Could not resolve host` for a fresh `trycloudflare.com` URL even though `dig` resolves it, because the system cached an earlier negative answer; flush it with `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` (the phone is not affected).
 - The public URL exposes every route, including `/metrics`. That is acceptable for a demo of a toy app, but the tunnel runs only while it is needed.
 - Stop the tunnel with `Ctrl+C` in its terminal, or `pkill -f "cloudflared tunnel"` if it runs in the background. The URL stops working at once.
 
