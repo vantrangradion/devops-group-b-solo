@@ -199,3 +199,4 @@ The app starts with safe defaults when any of these are unset.
 | `http_request_duration_seconds` | histogram | `method`, `route`, `status` |
 
 The `route` label is the route template (e.g. `/api/work`), and requests to unknown paths are recorded as `route="other"`.
+
