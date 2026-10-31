@@ -75,7 +75,11 @@ func newHandler(cfg config, tp trace.TracerProvider) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /api/work", workHandler(cfg))
-	mux.Handle("GET /metrics", promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{}))
+	// OpenMetrics is the only format that carries exemplars. Prometheus asks
+	// for it; a plain curl still gets the text format.
+	mux.Handle("GET /metrics", promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{
+		EnableOpenMetrics: true,
+	}))
 	return otelhttp.NewHandler(m.instrument(mux), "http",
 		otelhttp.WithTracerProvider(tp),
 		otelhttp.WithPropagators(propagator()),
@@ -117,7 +121,8 @@ func newMetrics() *metrics {
 // instrument records every request handled by mux. It runs after mux has
 // matched, so r.Pattern holds the route template. otelhttp reads the same
 // pattern to name the span ("GET /api/work") but reads http.route only before
-// the match, so it is set here.
+// the match, so it is set here, and the latency sample is linked to the
+// span's trace as an exemplar.
 func (m *metrics) instrument(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -137,7 +142,14 @@ func (m *metrics) instrument(mux *http.ServeMux) http.Handler {
 			span.SetAttributes(semconv.HTTPRoute(route))
 		}
 
-		m.duration.With(labels).Observe(time.Since(start).Seconds())
+		elapsed := time.Since(start).Seconds()
+		obs := m.duration.With(labels)
+		sc := span.SpanContext()
+		if eo, ok := obs.(prometheus.ExemplarObserver); ok && sc.IsSampled() {
+			eo.ObserveWithExemplar(elapsed, prometheus.Labels{"trace_id": sc.TraceID().String()})
+			return
+		}
+		obs.Observe(elapsed)
 	})
 }
 
