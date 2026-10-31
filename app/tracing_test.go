@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -93,5 +95,21 @@ func TestTraceContinuesIncomingTrace(t *testing.T) {
 	}
 	if got := spans[0].SpanContext().TraceID().String(); got != traceID {
 		t.Errorf("trace id = %s, want %s from traceparent", got, traceID)
+	}
+}
+
+func TestMetricsExemplar(t *testing.T) {
+	h, sr := tracedHandler(t)
+	do(t, h, "/api/work?ms=0")
+	traceID := sr.Ended()[0].SpanContext().TraceID().String()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil)
+	req.Header.Set("Accept", "application/openmetrics-text; version=1.0.0")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	body, _ := io.ReadAll(rec.Body)
+
+	if want := `trace_id="` + traceID + `"`; !strings.Contains(string(body), want) {
+		t.Errorf("OpenMetrics output missing exemplar %s", want)
 	}
 }
