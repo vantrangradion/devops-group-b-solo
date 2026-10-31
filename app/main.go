@@ -1,5 +1,6 @@
 // Command devops-app is a small HTTP service that implements the Group B app
-// contract: a health check, a simulated-work endpoint, and Prometheus metrics.
+// contract: a health check, a simulated-work endpoint, Prometheus metrics, and
+// OpenTelemetry traces.
 package main
 
 import (
@@ -20,6 +21,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -57,15 +62,25 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-// newMux wires the routes and wraps them in RED instrumentation. Each call
-// uses its own registry, so every instance starts with zeroed metrics.
+// newMux wires the routes with the global tracer provider.
 func newMux(cfg config) http.Handler {
+	return newHandler(cfg, otel.GetTracerProvider())
+}
+
+// newHandler wires the routes and wraps them in RED metrics and a server span
+// per request. Each call uses its own registry, so every instance starts with
+// zeroed metrics.
+func newHandler(cfg config, tp trace.TracerProvider) http.Handler {
 	m := newMetrics()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /api/work", workHandler(cfg))
 	mux.Handle("GET /metrics", promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{}))
-	return m.instrument(mux)
+	return otelhttp.NewHandler(m.instrument(mux), "http",
+		otelhttp.WithTracerProvider(tp),
+		otelhttp.WithPropagators(propagator()),
+		otelhttp.WithFilter(traced),
+	)
 }
 
 // metrics holds the RED series from the app contract.
@@ -100,19 +115,28 @@ func newMetrics() *metrics {
 }
 
 // instrument records every request handled by mux. It runs after mux has
-// matched, so r.Pattern holds the route template.
+// matched, so r.Pattern holds the route template. otelhttp reads the same
+// pattern to name the span ("GET /api/work") but reads http.route only before
+// the match, so it is set here.
 func (m *metrics) instrument(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		mux.ServeHTTP(rec, r)
 
+		route := routeLabel(r.Pattern)
 		labels := prometheus.Labels{
 			"method": methodLabel(r.Method),
-			"route":  routeLabel(r.Pattern),
+			"route":  route,
 			"status": strconv.Itoa(rec.status),
 		}
 		m.requests.With(labels).Inc()
+
+		span := trace.SpanFromContext(r.Context())
+		if r.Pattern != "" {
+			span.SetAttributes(semconv.HTTPRoute(route))
+		}
+
 		m.duration.With(labels).Observe(time.Since(start).Seconds())
 	})
 }
@@ -242,6 +266,19 @@ func main() {
 // run serves until SIGTERM or SIGINT, then drains in-flight requests.
 func run() error {
 	cfg := loadConfig()
+
+	shutdownTracing, err := setupTracing(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Flush buffered spans after the server has drained.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(ctx); err != nil {
+			slog.Error("flush traces", "err", err)
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              addr,
