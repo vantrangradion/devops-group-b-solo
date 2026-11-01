@@ -113,3 +113,46 @@ func TestMetricsExemplar(t *testing.T) {
 		t.Errorf("OpenMetrics output missing exemplar %s", want)
 	}
 }
+
+func TestTraceWorkParams(t *testing.T) {
+	h, sr := tracedHandler(t)
+	do(t, h, "/api/work?ms=0")
+
+	s := sr.Ended()[0]
+	if v, ok := attr(s, "work.ms"); !ok || v.AsInt64() != 0 {
+		t.Errorf("work.ms = %d, want 0", v.AsInt64())
+	}
+	if v, ok := attr(s, "work.fail_probability"); !ok || v.AsFloat64() != 0 {
+		t.Errorf("work.fail_probability = %v, want 0", v.AsFloat64())
+	}
+	if v, ok := attr(s, "work.failure_injected"); !ok || v.AsBool() {
+		t.Errorf("work.failure_injected = %v, want false", v.AsBool())
+	}
+	if n := len(s.Events()); n != 0 {
+		t.Errorf("events = %d, want 0 for a request that did not fail", n)
+	}
+}
+
+func TestTraceInjectedFailure(t *testing.T) {
+	h, sr := tracedHandler(t)
+	do(t, h, "/api/work?ms=0&fail=1")
+
+	s := sr.Ended()[0]
+	if v, ok := attr(s, "work.fail_probability"); !ok || v.AsFloat64() != 1 {
+		t.Errorf("work.fail_probability = %v, want 1", v.AsFloat64())
+	}
+	if v, ok := attr(s, "work.failure_injected"); !ok || !v.AsBool() {
+		t.Errorf("work.failure_injected = %v, want true", v.AsBool())
+	}
+	events := s.Events()
+	if len(events) != 1 || events[0].Name != "injected_failure" {
+		t.Fatalf("events = %v, want one injected_failure", events)
+	}
+	want := "random draw below fail=1"
+	for _, kv := range events[0].Attributes {
+		if kv.Key == "reason" && kv.Value.AsString() == want {
+			return
+		}
+	}
+	t.Errorf("injected_failure event has no reason %q", want)
+}
