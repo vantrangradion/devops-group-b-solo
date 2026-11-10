@@ -37,10 +37,15 @@ spec:
               app.kubernetes.io/name: devops-app
       containers:
         - name: devops-app
-          image: ghcr.io/vantrangradion/devops-app:ad44b2364d098db6ca031bd1dfad11885e14a411
+          image: ghcr.io/vantrangradion/devops-app:0c6823535571044aee55d360e1c6ef88f8d851b6
           ports:
             - name: http
               containerPort: 8080
+            # Fault toggles (app/README.md#fault-toggles). In no Service, so
+            # neither the LoadBalancer nor the tunnel reaches it; use
+            # scripts/fault.sh or kubectl port-forward.
+            - name: admin
+              containerPort: 8081
           # Explicit keyRefs, not envFrom: a missing key fails the pod start
           # instead of silently falling back to the image default.
           env:
@@ -79,16 +84,19 @@ spec:
                   fieldPath: metadata.name
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: k8s.pod.name=$(POD_NAME),k8s.namespace.name=devops-app,service.instance.id=$(POD_NAME)
-          # The first probe otherwise races the listener and logs a refused
-          # connection on every start.
+          # /ready follows the "ready" fault toggle, so a pod can be taken out
+          # of the Service endpoints during the demo. The first probe
+          # otherwise races the listener and logs a refused connection on
+          # every start.
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: http
             initialDelaySeconds: 1
             periodSeconds: 5
             timeoutSeconds: 1
             failureThreshold: 2
+          # Stays on /health: a not-ready pod must not be restarted.
           livenessProbe:
             httpGet:
               path: /health
