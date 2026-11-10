@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -215,6 +216,14 @@ func workHandler(cfg config) http.HandlerFunc {
 			return
 		}
 
+		// otelhttp records url.path but not the query, so without these the
+		// span would show a 500 but not that the caller asked for it.
+		span := trace.SpanFromContext(r.Context())
+		span.SetAttributes(
+			attribute.Int("work.ms", ms),
+			attribute.Float64("work.fail_probability", fail),
+		)
+
 		select {
 		case <-time.After(time.Duration(ms) * time.Millisecond):
 		case <-r.Context().Done():
@@ -222,8 +231,15 @@ func workHandler(cfg config) http.HandlerFunc {
 		}
 
 		status := http.StatusOK
-		if rand.Float64() < fail {
+		injected := rand.Float64() < fail
+		span.SetAttributes(attribute.Bool("work.failure_injected", injected))
+		if injected {
 			status = http.StatusInternalServerError
+			// An event, not a status description: otelhttp sets the 5xx
+			// status after the handler returns and would clear the description.
+			span.AddEvent("injected_failure", trace.WithAttributes(
+				attribute.String("reason", "random draw below fail="+strconv.FormatFloat(fail, 'g', -1, 64)),
+			))
 		}
 		writeJSON(w, status, workResponse{
 			Message: cfg.Message,
