@@ -49,6 +49,22 @@ func TestWorkReturnsMessage(t *testing.T) {
 	}
 }
 
+// The k6 check expects the configmap message on every response, failed ones
+// included, so the error is added to the body rather than replacing it.
+func TestWorkFailureKeepsMessage(t *testing.T) {
+	rec := do(t, newMux(testConfig), "/api/work?ms=0&fail=1")
+	var body workResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Message != testConfig.Message {
+		t.Errorf("message = %q, want %q", body.Message, testConfig.Message)
+	}
+	if body.Status != http.StatusInternalServerError || body.Error != "upstream timeout after 0ms" {
+		t.Errorf("status = %d, error = %q; want 500 and the upstream timeout", body.Status, body.Error)
+	}
+}
+
 func TestWorkStatus(t *testing.T) {
 	tests := []struct {
 		name   string

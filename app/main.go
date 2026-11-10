@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"math/rand/v2"
@@ -210,6 +211,7 @@ type workResponse struct {
 	AppEnv  string `json:"app_env"`
 	MS      int    `json:"ms"`
 	Status  int    `json:"status"`
+	Error   string `json:"error,omitempty"`
 }
 
 func workHandler(cfg config, logger *slog.Logger, f *faults) http.HandlerFunc {
@@ -235,41 +237,50 @@ func workHandler(cfg config, logger *slog.Logger, f *faults) http.HandlerFunc {
 			)
 		}
 
-		select {
-		case <-time.After(time.Duration(ms+fs.ExtraLatencyMS) * time.Millisecond):
-		case <-r.Context().Done():
-			return
-		}
-
-		status := http.StatusOK
-		reason := ""
-		switch {
-		case rand.Float64() < fail:
-			reason = "random draw below fail=" + strconv.FormatFloat(fail, 'g', -1, 64)
-		case rand.Float64() < fs.ErrorRate:
-			reason = "fault toggle error_rate=" + strconv.FormatFloat(fs.ErrorRate, 'g', -1, 64)
-		}
-		injected := reason != ""
-		span.SetAttributes(attribute.Bool("work.failure_injected", injected))
-		if injected {
-			status = http.StatusInternalServerError
-			// An event, not a status description: otelhttp sets the 5xx
-			// status after the handler returns and would clear the description.
-			span.AddEvent("injected_failure", trace.WithAttributes(
-				attribute.String("reason", reason),
-			))
-			// The request context carries the span, so the OTel log handler
-			// stamps this record with its trace and span IDs.
-			logger.WarnContext(r.Context(), "injected failure",
-				"route", "/api/work", "work.ms", ms, "work.fail_probability", fail, "reason", reason)
-		}
-		writeJSON(w, status, workResponse{
+		resp := workResponse{
 			Message: cfg.Message,
 			AppEnv:  cfg.AppEnv,
 			MS:      ms,
-			Status:  status,
-		})
+			Status:  http.StatusOK,
+		}
+		if err := doWork(r.Context(), ms, fail, fs); err != nil {
+			if r.Context().Err() != nil {
+				return // client went away; nothing to answer
+			}
+			// Generic error path: records whatever doWork returned as a
+			// standard exception event (type and message), so the trace shows
+			// the error itself, not a reason written in advance. The span
+			// status is set by otelhttp from the 5xx code after this handler
+			// returns, which would overwrite a description set here.
+			span.RecordError(err)
+			// The request context carries the span, so the OTel log handler
+			// stamps this record with its trace and span IDs.
+			logger.WarnContext(r.Context(), "work failed",
+				"route", "/api/work", "work.ms", ms, "work.fail_probability", fail, "error", err.Error())
+			resp.Status = http.StatusInternalServerError
+			resp.Error = err.Error()
+		}
+		writeJSON(w, resp.Status, resp)
 	}
+}
+
+// doWork simulates a call to an upstream that takes ms milliseconds, plus any
+// extra latency from the fault toggles. With probability fail it times out;
+// with probability error_rate the upstream is unavailable.
+func doWork(ctx context.Context, ms int, fail float64, fs faultState) error {
+	total := ms + fs.ExtraLatencyMS
+	select {
+	case <-time.After(time.Duration(total) * time.Millisecond):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if rand.Float64() < fail {
+		return fmt.Errorf("upstream timeout after %dms", total)
+	}
+	if rand.Float64() < fs.ErrorRate {
+		return fmt.Errorf("upstream unavailable: fault toggle error_rate=%s", strconv.FormatFloat(fs.ErrorRate, 'g', -1, 64))
+	}
+	return nil
 }
 
 // parseWorkParams reads ms and fail, applying defaults and clamping

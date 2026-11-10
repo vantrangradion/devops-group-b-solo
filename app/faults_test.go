@@ -60,15 +60,15 @@ func TestFaultErrorRate(t *testing.T) {
 		t.Errorf("fault.error_rate = %v, want 1", v.AsFloat64())
 	}
 	events := s.Events()
-	if len(events) != 1 || events[0].Name != "injected_failure" {
-		t.Fatalf("events = %v, want one injected_failure", events)
+	if len(events) != 1 || events[0].Name != "exception" {
+		t.Fatalf("events = %v, want one exception", events)
 	}
 	for _, kv := range events[0].Attributes {
-		if kv.Key == "reason" && kv.Value.AsString() == "fault toggle error_rate=1" {
+		if kv.Key == "exception.message" && kv.Value.AsString() == "upstream unavailable: fault toggle error_rate=1" {
 			return
 		}
 	}
-	t.Errorf("injected_failure event has no toggle reason: %v", events[0].Attributes)
+	t.Errorf("exception event does not name the toggle: %v", events[0].Attributes)
 }
 
 func TestFaultExtraLatency(t *testing.T) {
