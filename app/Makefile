@@ -25,8 +25,9 @@ test:
 build:
 	docker build --platform linux/amd64 -t $(IMAGE):$(TAG) .
 
-# Starts the built image and checks it serves /health and /metrics. Distroless
-# has no shell or curl, so the checks run from the host.
+# Starts the built image and checks it serves /health and /api/work. Metrics are
+# pushed over OTLP, not served. Distroless has no shell or curl, so the checks
+# run from the host.
 smoke:
 	@docker rm -f $(SMOKE_NAME) >/dev/null 2>&1 || true
 	docker run -d --name $(SMOKE_NAME) -p $(SMOKE_PORT):8080 $(IMAGE):$(TAG)
@@ -36,7 +37,7 @@ smoke:
 		sleep 0.5; \
 	done; \
 	curl -fsS -o /dev/null http://localhost:$(SMOKE_PORT)/health || { echo "smoke: /health failed"; status=1; }; \
-	curl -fsS http://localhost:$(SMOKE_PORT)/metrics | grep -q '^# TYPE' || { echo "smoke: /metrics failed"; status=1; }; \
+	curl -fsS 'http://localhost:$(SMOKE_PORT)/api/work?ms=0' | grep -q '"status":200' || { echo "smoke: /api/work failed"; status=1; }; \
 	if [ $$status -ne 0 ]; then docker logs $(SMOKE_NAME); fi; \
 	docker rm -f $(SMOKE_NAME) >/dev/null; \
 	if [ $$status -eq 0 ]; then echo "smoke: ok"; fi; \

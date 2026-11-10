@@ -1,15 +1,24 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 var testConfig = config{AppEnv: "test", Message: "hello-from-test", APIKeySet: true}
+
+// discard drops log records in tests that do not check them.
+var discard = slog.New(slog.DiscardHandler)
 
 // do sends one request through a mux and returns the recorded response.
 func do(t *testing.T, h http.Handler, target string) *httptest.ResponseRecorder {
@@ -94,7 +103,7 @@ func TestParseWorkParams(t *testing.T) {
 }
 
 func TestMetricsCountRequests(t *testing.T) {
-	h := newMux(testConfig)
+	h, reader := meteredHandler(t)
 	for range 5 {
 		do(t, h, "/api/work?ms=0&fail=1")
 	}
@@ -104,46 +113,122 @@ func TestMetricsCountRequests(t *testing.T) {
 	do(t, h, "/foo/1")
 	do(t, h, "/foo/2")
 
-	body := scrape(t, h)
-	for _, want := range []string{
-		`http_requests_total{method="GET",route="/api/work",status="500"} 5`,
-		`http_requests_total{method="GET",route="/api/work",status="200"} 10`,
-		`http_requests_total{method="GET",route="other",status="404"} 2`,
-		`http_request_duration_seconds_count{method="GET",route="/api/work",status="200"} 10`,
+	rm := collect(t, reader)
+	for _, tt := range []struct {
+		route, status string
+		want          int64
+	}{
+		{"/api/work", "500", 5},
+		{"/api/work", "200", 10},
+		{"other", "404", 2},
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("metrics missing %q", want)
+		if got := requestCount(t, rm, tt.route, tt.status); got != tt.want {
+			t.Errorf("http.requests{route=%q,status=%q} = %d, want %d", tt.route, tt.status, got, tt.want)
 		}
 	}
-	if strings.Contains(body, `route="/foo/`) {
-		t.Error("metrics contain a raw path as a route label")
+	if got := latencyPoint(t, rm, "/api/work", "200").Count; got != 10 {
+		t.Errorf("http.request.duration{route=/api/work,status=200} count = %d, want 10", got)
+	}
+	for _, dp := range requestPoints(t, rm) {
+		if route, _ := dp.Attributes.Value("route"); strings.HasPrefix(route.AsString(), "/foo/") {
+			t.Errorf("metrics contain a raw path as a route label: %q", route.AsString())
+		}
 	}
 }
 
 func TestMetricsCounterIncrements(t *testing.T) {
-	h := newMux(testConfig)
-	const series = `http_requests_total{method="GET",route="/health",status="200"}`
+	h, reader := meteredHandler(t)
 
 	do(t, h, "/health")
-	if body := scrape(t, h); !strings.Contains(body, series+" 1") {
-		t.Fatalf("after 1 request: metrics missing %q", series+" 1")
+	if got := requestCount(t, collect(t, reader), "/health", "200"); got != 1 {
+		t.Fatalf("after 1 request: http.requests = %d, want 1", got)
 	}
 	do(t, h, "/health")
-	if body := scrape(t, h); !strings.Contains(body, series+" 2") {
-		t.Fatalf("after 2 requests: metrics missing %q", series+" 2")
+	if got := requestCount(t, collect(t, reader), "/health", "200"); got != 2 {
+		t.Fatalf("after 2 requests: http.requests = %d, want 2", got)
 	}
 }
 
-// scrape returns the /metrics body.
-func scrape(t *testing.T, h http.Handler) string {
+func TestNoMetricsEndpoint(t *testing.T) {
+	// Metrics are pushed to the Collector, so the app no longer serves them.
+	if rec := do(t, newMux(testConfig), "/metrics"); rec.Code != http.StatusNotFound {
+		t.Errorf("/metrics status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// meteredHandler returns a handler whose metrics are read on demand from an
+// in-memory reader.
+func meteredHandler(t *testing.T) (http.Handler, *sdkmetric.ManualReader) {
 	t.Helper()
-	rec := do(t, h, "/metrics")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("/metrics status = %d, want %d", rec.Code, http.StatusOK)
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	return newHandler(testConfig, tracenoop.NewTracerProvider(), mp, discard), reader
+}
+
+func collect(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
 	}
-	b, err := io.ReadAll(rec.Body)
-	if err != nil {
-		t.Fatalf("read /metrics body: %v", err)
+	return rm
+}
+
+// find returns the metric with the given instrument name.
+func find(t *testing.T, rm metricdata.ResourceMetrics, name string) metricdata.Metrics {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == name {
+				return m
+			}
+		}
 	}
-	return string(b)
+	t.Fatalf("metric %q not recorded", name)
+	return metricdata.Metrics{}
+}
+
+func requestPoints(t *testing.T, rm metricdata.ResourceMetrics) []metricdata.DataPoint[int64] {
+	t.Helper()
+	sum, ok := find(t, rm, "http.requests").Data.(metricdata.Sum[int64])
+	if !ok || !sum.IsMonotonic || sum.Temporality != metricdata.CumulativeTemporality {
+		t.Fatalf("http.requests is not a cumulative monotonic sum")
+	}
+	return sum.DataPoints
+}
+
+func matches(set attribute.Set, route, status string) bool {
+	r, _ := set.Value("route")
+	s, _ := set.Value("status")
+	m, _ := set.Value("method")
+	return r.AsString() == route && s.AsString() == status && m.AsString() == http.MethodGet
+}
+
+// requestCount returns the http.requests value for one GET route and status.
+func requestCount(t *testing.T, rm metricdata.ResourceMetrics, route, status string) int64 {
+	t.Helper()
+	for _, dp := range requestPoints(t, rm) {
+		if matches(dp.Attributes, route, status) {
+			return dp.Value
+		}
+	}
+	return 0
+}
+
+// latencyPoint returns the http.request.duration point for one GET route and
+// status.
+func latencyPoint(t *testing.T, rm metricdata.ResourceMetrics, route, status string) metricdata.HistogramDataPoint[float64] {
+	t.Helper()
+	hist, ok := find(t, rm, "http.request.duration").Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("http.request.duration is not a histogram")
+	}
+	for _, dp := range hist.DataPoints {
+		if matches(dp.Attributes, route, status) {
+			return dp
+		}
+	}
+	t.Fatalf("no http.request.duration point for route=%q status=%q", route, status)
+	return metricdata.HistogramDataPoint[float64]{}
 }
