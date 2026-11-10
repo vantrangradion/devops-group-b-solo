@@ -101,8 +101,8 @@ func propagator() propagation.TextMapPropagator {
 	)
 }
 
-// traced reports whether a request gets a span. Probes hit /health every few
-// seconds and would bury the /api/work traces.
+// traced reports whether a request gets a span. Probes hit /health and /ready
+// every few seconds and would bury the /api/work traces.
 func traced(r *http.Request) bool {
-	return r.URL.Path != "/health"
+	return r.URL.Path != "/health" && r.URL.Path != "/ready"
 }

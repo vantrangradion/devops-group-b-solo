@@ -30,6 +30,9 @@ import (
 
 const (
 	addr = ":8080"
+	// defaultAdminAddr serves the fault toggles (faults.go). It is in no
+	// Service, so it is reachable only through kubectl port-forward.
+	defaultAdminAddr = ":8081"
 
 	defaultMS   = 50
 	maxMS       = 2000
@@ -46,6 +49,7 @@ type config struct {
 	AppEnv    string
 	Message   string
 	APIKeySet bool
+	AdminAddr string
 }
 
 func loadConfig() config {
@@ -53,6 +57,7 @@ func loadConfig() config {
 		AppEnv:    getenv("APP_ENV", "dev"),
 		Message:   getenv("MESSAGE", "hello from devops-app"),
 		APIKeySet: os.Getenv("API_KEY") != "",
+		AdminAddr: getenv("ADMIN_ADDR", defaultAdminAddr),
 	}
 }
 
@@ -69,13 +74,19 @@ func newMux(cfg config) http.Handler {
 	return newHandler(cfg, otel.GetTracerProvider(), otel.GetMeterProvider(), slog.Default())
 }
 
-// newHandler wires the routes and wraps them in RED metrics and a server span
-// per request.
+// newHandler wires the routes with fault toggles at their defaults.
 func newHandler(cfg config, tp trace.TracerProvider, mp metric.MeterProvider, logger *slog.Logger) http.Handler {
+	return newAppHandler(cfg, tp, mp, logger, newFaults())
+}
+
+// newAppHandler wires the routes and wraps them in RED metrics and a server
+// span per request. f is shared with the admin listener.
+func newAppHandler(cfg config, tp trace.TracerProvider, mp metric.MeterProvider, logger *slog.Logger, f *faults) http.Handler {
 	m := newMetrics(mp)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
-	mux.HandleFunc("GET /api/work", workHandler(cfg, logger))
+	mux.HandleFunc("GET /ready", readyHandler(f))
+	mux.HandleFunc("GET /api/work", workHandler(cfg, logger, f))
 	return otelhttp.NewHandler(m.instrument(mux), "http",
 		otelhttp.WithTracerProvider(tp),
 		// otelhttp would record its own request metrics without the route
@@ -126,6 +137,11 @@ func (m *metrics) instrument(mux *http.ServeMux) http.Handler {
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		mux.ServeHTTP(rec, r)
 
+		// Readiness probes are kubelet traffic: a not-ready pod's 503s would
+		// otherwise show up in the dashboard's error ratio.
+		if r.Pattern == "GET /ready" {
+			return
+		}
 		route := routeLabel(r.Pattern)
 		if r.Pattern != "" {
 			trace.SpanFromContext(r.Context()).SetAttributes(semconv.HTTPRoute(route))
@@ -196,7 +212,7 @@ type workResponse struct {
 	Status  int    `json:"status"`
 }
 
-func workHandler(cfg config, logger *slog.Logger) http.HandlerFunc {
+func workHandler(cfg config, logger *slog.Logger, f *faults) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ms, fail, err := parseWorkParams(r)
 		if err != nil {
@@ -211,21 +227,34 @@ func workHandler(cfg config, logger *slog.Logger) http.HandlerFunc {
 			attribute.Int("work.ms", ms),
 			attribute.Float64("work.fail_probability", fail),
 		)
+		fs := f.get()
+		if fs.active() {
+			span.SetAttributes(
+				attribute.Float64("fault.error_rate", fs.ErrorRate),
+				attribute.Int("fault.extra_latency_ms", fs.ExtraLatencyMS),
+			)
+		}
 
 		select {
-		case <-time.After(time.Duration(ms) * time.Millisecond):
+		case <-time.After(time.Duration(ms+fs.ExtraLatencyMS) * time.Millisecond):
 		case <-r.Context().Done():
 			return
 		}
 
 		status := http.StatusOK
-		injected := rand.Float64() < fail
+		reason := ""
+		switch {
+		case rand.Float64() < fail:
+			reason = "random draw below fail=" + strconv.FormatFloat(fail, 'g', -1, 64)
+		case rand.Float64() < fs.ErrorRate:
+			reason = "fault toggle error_rate=" + strconv.FormatFloat(fs.ErrorRate, 'g', -1, 64)
+		}
+		injected := reason != ""
 		span.SetAttributes(attribute.Bool("work.failure_injected", injected))
 		if injected {
 			status = http.StatusInternalServerError
 			// An event, not a status description: otelhttp sets the 5xx
 			// status after the handler returns and would clear the description.
-			reason := "random draw below fail=" + strconv.FormatFloat(fail, 'g', -1, 64)
 			span.AddEvent("injected_failure", trace.WithAttributes(
 				attribute.String("reason", reason),
 			))
@@ -308,19 +337,28 @@ func run() error {
 		}
 	}()
 
+	f := newFaults()
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           newMux(cfg),
+		Handler:           newAppHandler(cfg, otel.GetTracerProvider(), otel.GetMeterProvider(), slog.Default(), f),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	admin := &http.Server{
+		Addr:              cfg.AdminAddr,
+		Handler:           newAdminMux(f, slog.Default()),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
-		slog.Info("starting", "addr", addr, "app_env", cfg.AppEnv, "api_key_set", cfg.APIKeySet)
+		slog.Info("starting", "addr", addr, "admin_addr", cfg.AdminAddr, "app_env", cfg.AppEnv, "api_key_set", cfg.APIKeySet)
 		errCh <- srv.ListenAndServe()
+	}()
+	go func() {
+		errCh <- admin.ListenAndServe()
 	}()
 
 	select {
@@ -332,6 +370,8 @@ func run() error {
 	slog.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	// The admin listener holds no in-flight work worth draining.
+	_ = admin.Close()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
 	}
