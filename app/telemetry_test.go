@@ -137,39 +137,39 @@ func TestTraceWorkParams(t *testing.T) {
 	if v, ok := attr(s, "work.fail_probability"); !ok || v.AsFloat64() != 0 {
 		t.Errorf("work.fail_probability = %v, want 0", v.AsFloat64())
 	}
-	if v, ok := attr(s, "work.failure_injected"); !ok || v.AsBool() {
-		t.Errorf("work.failure_injected = %v, want false", v.AsBool())
-	}
 	if n := len(s.Events()); n != 0 {
 		t.Errorf("events = %d, want 0 for a request that did not fail", n)
 	}
 }
 
-func TestTraceInjectedFailure(t *testing.T) {
+func TestTraceRecordsError(t *testing.T) {
 	h, sr := tracedHandler(t)
 	do(t, h, "/api/work?ms=0&fail=1")
 
 	s := sr.Ended()[0]
-	if v, ok := attr(s, "work.fail_probability"); !ok || v.AsFloat64() != 1 {
-		t.Errorf("work.fail_probability = %v, want 1", v.AsFloat64())
+	if s.Status().Code != codes.Error {
+		t.Errorf("status = %v, want Error", s.Status().Code)
 	}
-	if v, ok := attr(s, "work.failure_injected"); !ok || !v.AsBool() {
-		t.Errorf("work.failure_injected = %v, want true", v.AsBool())
+	if _, ok := attr(s, "work.failure_injected"); ok {
+		t.Error("work.failure_injected is set; the error path must not know why it failed")
 	}
 	events := s.Events()
-	if len(events) != 1 || events[0].Name != "injected_failure" {
-		t.Fatalf("events = %v, want one injected_failure", events)
+	if len(events) != 1 || events[0].Name != "exception" {
+		t.Fatalf("events = %v, want one exception", events)
 	}
-	want := "random draw below fail=1"
+	got := map[string]string{}
 	for _, kv := range events[0].Attributes {
-		if kv.Key == "reason" && kv.Value.AsString() == want {
-			return
-		}
+		got[string(kv.Key)] = kv.Value.AsString()
 	}
-	t.Errorf("injected_failure event has no reason %q", want)
+	if want := "upstream timeout after 0ms"; got["exception.message"] != want {
+		t.Errorf("exception.message = %q, want %q", got["exception.message"], want)
+	}
+	if got["exception.type"] == "" {
+		t.Error("exception.type is empty")
+	}
 }
 
-// TestLogCorrelatedToTrace checks that an injected failure writes a log
+// TestLogCorrelatedToTrace checks that a failed request writes a log
 // record that carries the request's trace and span IDs.
 func TestLogCorrelatedToTrace(t *testing.T) {
 	sr := tracetest.NewSpanRecorder()
@@ -185,7 +185,7 @@ func TestLogCorrelatedToTrace(t *testing.T) {
 	var found bool
 	for _, records := range rec.Result() {
 		for _, r := range records {
-			if r.Body.AsString() != "injected failure" {
+			if r.Body.AsString() != "work failed" {
 				continue
 			}
 			found = true
@@ -196,7 +196,7 @@ func TestLogCorrelatedToTrace(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("no injected failure log record")
+		t.Fatal("no work failed log record")
 	}
 }
 
