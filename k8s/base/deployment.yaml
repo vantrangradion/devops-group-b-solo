@@ -59,19 +59,26 @@ spec:
                 secretKeyRef:
                   name: devops-app
                   key: API_KEY
-            # Traces go to the Collector in monitoring (tracing/). Unset, the
-            # app sends none.
+            # Traces, metrics and logs go to the Collector in monitoring
+            # (tracing/). Unset, the app sends none of them.
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://otel-collector.monitoring.svc:4318
+            # The SDK default is 60 s; 5 s keeps the dashboard following the
+            # live k6 run.
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: "5000"
             - name: OTEL_SERVICE_NAME
               value: devops-app
-            # Each span names the pod that served it.
+            # Each span, metric series and log record names the pod that
+            # served it; the Collector turns these into the namespace and pod
+            # labels, and Prometheus uses service.instance.id as the instance
+            # label.
             - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
             - name: OTEL_RESOURCE_ATTRIBUTES
-              value: k8s.pod.name=$(POD_NAME),k8s.namespace.name=devops-app
+              value: k8s.pod.name=$(POD_NAME),k8s.namespace.name=devops-app,service.instance.id=$(POD_NAME)
           # The first probe otherwise races the listener and logs a refused
           # connection on every start.
           readinessProbe:

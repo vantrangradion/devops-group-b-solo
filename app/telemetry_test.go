@@ -1,17 +1,22 @@
 package main
 
 import (
-	"io"
+	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/log/logtest"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 // tracedHandler returns a handler whose spans land in an in-memory recorder.
@@ -20,7 +25,7 @@ func tracedHandler(t *testing.T) (http.Handler, *tracetest.SpanRecorder) {
 	sr := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
 	t.Cleanup(func() { _ = tp.Shutdown(t.Context()) })
-	return newHandler(testConfig, tp), sr
+	return newHandler(testConfig, tp, metricnoop.NewMeterProvider(), discard), sr
 }
 
 func attr(span sdktrace.ReadOnlySpan, key attribute.Key) (attribute.Value, bool) {
@@ -71,13 +76,12 @@ func TestTraceErrorStatus(t *testing.T) {
 	}
 }
 
-func TestTraceSkipsProbesAndScrapes(t *testing.T) {
+func TestTraceSkipsProbes(t *testing.T) {
 	h, sr := tracedHandler(t)
 	do(t, h, "/health")
-	do(t, h, "/metrics")
 
 	if n := len(sr.Ended()); n != 0 {
-		t.Errorf("spans = %d, want 0 for /health and /metrics", n)
+		t.Errorf("spans = %d, want 0 for /health", n)
 	}
 }
 
@@ -98,20 +102,28 @@ func TestTraceContinuesIncomingTrace(t *testing.T) {
 	}
 }
 
+// TestMetricsExemplar checks that a latency sample keeps the trace ID of the
+// request's span, which the Collector exports as a trace_id exemplar.
 func TestMetricsExemplar(t *testing.T) {
-	h, sr := tracedHandler(t)
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		_ = mp.Shutdown(context.Background())
+	})
+	h := newHandler(testConfig, tp, mp, discard)
+
 	do(t, h, "/api/work?ms=0")
-	traceID := sr.Ended()[0].SpanContext().TraceID().String()
+	traceID := sr.Ended()[0].SpanContext().TraceID()
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil)
-	req.Header.Set("Accept", "application/openmetrics-text; version=1.0.0")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	body, _ := io.ReadAll(rec.Body)
-
-	if want := `trace_id="` + traceID + `"`; !strings.Contains(string(body), want) {
-		t.Errorf("OpenMetrics output missing exemplar %s", want)
+	for _, ex := range latencyPoint(t, collect(t, reader), "/api/work", "200").Exemplars {
+		if trace.TraceID(ex.TraceID) == traceID {
+			return
+		}
 	}
+	t.Errorf("latency point has no exemplar for trace %s", traceID)
 }
 
 func TestTraceWorkParams(t *testing.T) {
@@ -155,4 +167,48 @@ func TestTraceInjectedFailure(t *testing.T) {
 		}
 	}
 	t.Errorf("injected_failure event has no reason %q", want)
+}
+
+// TestLogCorrelatedToTrace checks that an injected failure writes a log
+// record that carries the request's trace and span IDs.
+func TestLogCorrelatedToTrace(t *testing.T) {
+	sr := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sr))
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	rec := logtest.NewRecorder()
+	logger := slog.New(otelslog.NewHandler("devops-app", otelslog.WithLoggerProvider(rec)))
+	h := newHandler(testConfig, tp, metricnoop.NewMeterProvider(), logger)
+
+	do(t, h, "/api/work?ms=0&fail=1")
+	span := sr.Ended()[0].SpanContext()
+
+	var found bool
+	for _, records := range rec.Result() {
+		for _, r := range records {
+			if r.Body.AsString() != "injected failure" {
+				continue
+			}
+			found = true
+			sc := trace.SpanContextFromContext(r.Context)
+			if sc.TraceID() != span.TraceID() || sc.SpanID() != span.SpanID() {
+				t.Errorf("log trace/span = %s/%s, want %s/%s", sc.TraceID(), sc.SpanID(), span.TraceID(), span.SpanID())
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no injected failure log record")
+	}
+}
+
+func TestNoLogWithoutFailure(t *testing.T) {
+	rec := logtest.NewRecorder()
+	logger := slog.New(otelslog.NewHandler("devops-app", otelslog.WithLoggerProvider(rec)))
+	h := newHandler(testConfig, tracenoop.NewTracerProvider(), metricnoop.NewMeterProvider(), logger)
+
+	do(t, h, "/api/work?ms=0")
+	for _, records := range rec.Result() {
+		if len(records) != 0 {
+			t.Errorf("log records = %d, want 0 for a request that did not fail", len(records))
+		}
+	}
 }

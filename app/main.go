@@ -1,6 +1,6 @@
 // Command devops-app is a small HTTP service that implements the Group B app
-// contract: a health check, a simulated-work endpoint, Prometheus metrics, and
-// OpenTelemetry traces.
+// contract: a health check and a simulated-work endpoint, with OpenTelemetry
+// metrics, traces and logs pushed over OTLP to the Collector.
 package main
 
 import (
@@ -18,12 +18,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -63,67 +63,63 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-// newMux wires the routes with the global tracer provider.
+// newMux wires the routes with the global tracer and meter providers and the
+// default logger.
 func newMux(cfg config) http.Handler {
-	return newHandler(cfg, otel.GetTracerProvider())
+	return newHandler(cfg, otel.GetTracerProvider(), otel.GetMeterProvider(), slog.Default())
 }
 
 // newHandler wires the routes and wraps them in RED metrics and a server span
-// per request. Each call uses its own registry, so every instance starts with
-// zeroed metrics.
-func newHandler(cfg config, tp trace.TracerProvider) http.Handler {
-	m := newMetrics()
+// per request.
+func newHandler(cfg config, tp trace.TracerProvider, mp metric.MeterProvider, logger *slog.Logger) http.Handler {
+	m := newMetrics(mp)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
-	mux.HandleFunc("GET /api/work", workHandler(cfg))
-	// OpenMetrics is the only format that carries exemplars. Prometheus asks
-	// for it; a plain curl still gets the text format.
-	mux.Handle("GET /metrics", promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{
-		EnableOpenMetrics: true,
-	}))
+	mux.HandleFunc("GET /api/work", workHandler(cfg, logger))
 	return otelhttp.NewHandler(m.instrument(mux), "http",
 		otelhttp.WithTracerProvider(tp),
+		// otelhttp would record its own request metrics without the route
+		// label; instrument records the RED series instead.
+		otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()),
 		otelhttp.WithPropagators(propagator()),
 		otelhttp.WithFilter(traced),
 	)
 }
 
-// metrics holds the RED series from the app contract.
+// metrics holds the RED instruments from the app contract. The Collector's
+// Prometheus exporter names them http_requests_total and
+// http_request_duration_seconds.
 type metrics struct {
-	registry *prometheus.Registry
-	requests *prometheus.CounterVec
-	duration *prometheus.HistogramVec
+	requests metric.Int64Counter
+	duration metric.Float64Histogram
 }
 
-func newMetrics() *metrics {
-	labels := []string{"method", "route", "status"}
-	m := &metrics{
-		registry: prometheus.NewRegistry(),
-		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "http_requests_total",
-			Help: "HTTP requests by method, route template, and status code.",
-		}, labels),
-		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Name: "http_request_duration_seconds",
-			Help: "HTTP request latency by method, route template, and status code.",
-			// Covers the full /api/work delay range (up to 2 s).
-			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 2.5},
-		}, labels),
-	}
-	m.registry.MustRegister(
-		m.requests,
-		m.duration,
-		collectors.NewGoCollector(),
-		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
+func newMetrics(mp metric.MeterProvider) *metrics {
+	meter := mp.Meter("devops-app")
+	requests, err := meter.Int64Counter("http.requests",
+		metric.WithDescription("HTTP requests by method, route template, and status code."),
+		metric.WithUnit("{request}"),
 	)
-	return m
+	if err != nil {
+		otel.Handle(err)
+	}
+	duration, err := meter.Float64Histogram("http.request.duration",
+		metric.WithDescription("HTTP request latency by method, route template, and status code."),
+		metric.WithUnit("s"),
+		// Covers the full /api/work delay range (up to 2 s).
+		metric.WithExplicitBucketBoundaries(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 2.5),
+	)
+	if err != nil {
+		otel.Handle(err)
+	}
+	return &metrics{requests: requests, duration: duration}
 }
 
 // instrument records every request handled by mux. It runs after mux has
 // matched, so r.Pattern holds the route template. otelhttp reads the same
 // pattern to name the span ("GET /api/work") but reads http.route only before
-// the match, so it is set here, and the latency sample is linked to the
-// span's trace as an exemplar.
+// the match, so it is set here. The request context carries the span, so the
+// SDK keeps its trace ID as an exemplar on the latency sample.
 func (m *metrics) instrument(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -131,26 +127,18 @@ func (m *metrics) instrument(mux *http.ServeMux) http.Handler {
 		mux.ServeHTTP(rec, r)
 
 		route := routeLabel(r.Pattern)
-		labels := prometheus.Labels{
-			"method": methodLabel(r.Method),
-			"route":  route,
-			"status": strconv.Itoa(rec.status),
-		}
-		m.requests.With(labels).Inc()
-
-		span := trace.SpanFromContext(r.Context())
 		if r.Pattern != "" {
-			span.SetAttributes(semconv.HTTPRoute(route))
+			trace.SpanFromContext(r.Context()).SetAttributes(semconv.HTTPRoute(route))
 		}
 
-		elapsed := time.Since(start).Seconds()
-		obs := m.duration.With(labels)
-		sc := span.SpanContext()
-		if eo, ok := obs.(prometheus.ExemplarObserver); ok && sc.IsSampled() {
-			eo.ObserveWithExemplar(elapsed, prometheus.Labels{"trace_id": sc.TraceID().String()})
-			return
-		}
-		obs.Observe(elapsed)
+		attrs := metric.WithAttributes(
+			attribute.String("method", methodLabel(r.Method)),
+			attribute.String("route", route),
+			attribute.String("status", strconv.Itoa(rec.status)),
+		)
+		ctx := r.Context()
+		m.requests.Add(ctx, 1, attrs)
+		m.duration.Record(ctx, time.Since(start).Seconds(), attrs)
 	})
 }
 
@@ -208,7 +196,7 @@ type workResponse struct {
 	Status  int    `json:"status"`
 }
 
-func workHandler(cfg config) http.HandlerFunc {
+func workHandler(cfg config, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ms, fail, err := parseWorkParams(r)
 		if err != nil {
@@ -237,9 +225,14 @@ func workHandler(cfg config) http.HandlerFunc {
 			status = http.StatusInternalServerError
 			// An event, not a status description: otelhttp sets the 5xx
 			// status after the handler returns and would clear the description.
+			reason := "random draw below fail=" + strconv.FormatFloat(fail, 'g', -1, 64)
 			span.AddEvent("injected_failure", trace.WithAttributes(
-				attribute.String("reason", "random draw below fail="+strconv.FormatFloat(fail, 'g', -1, 64)),
+				attribute.String("reason", reason),
 			))
+			// The request context carries the span, so the OTel log handler
+			// stamps this record with its trace and span IDs.
+			logger.WarnContext(r.Context(), "injected failure",
+				"route", "/api/work", "work.ms", ms, "work.fail_probability", fail, "reason", reason)
 		}
 		writeJSON(w, status, workResponse{
 			Message: cfg.Message,
@@ -295,16 +288,23 @@ func main() {
 func run() error {
 	cfg := loadConfig()
 
-	shutdownTracing, err := setupTracing(context.Background())
+	shutdownTelemetry, err := setupTelemetry(context.Background())
 	if err != nil {
 		return err
 	}
+	// Logs still go to stderr for kubectl logs, and also to the OTel logger
+	// provider (a no-op when no OTLP endpoint is set).
+	slog.SetDefault(slog.New(slog.NewMultiHandler(
+		slog.NewTextHandler(os.Stderr, nil),
+		otelslog.NewHandler("devops-app"),
+	)))
 	defer func() {
-		// Flush buffered spans after the server has drained.
+		// Flush buffered spans and the last metric values after the server
+		// has drained.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := shutdownTracing(ctx); err != nil {
-			slog.Error("flush traces", "err", err)
+		if err := shutdownTelemetry(ctx); err != nil {
+			slog.Error("flush telemetry", "err", err)
 		}
 	}()
 

@@ -5,8 +5,7 @@ metadata:
   namespace: devops-app
   labels:
     app.kubernetes.io/name: devops-app
-    # The Pillar 3 ServiceMonitor must exclude this Service (e.g. a
-    # matchExpressions NotIn on this label), or each pod is scraped twice.
+    # Marks the Service used for remote access (k3d mapping, tunnel).
     app.kubernetes.io/component: remote-access
 spec:
   # k3d maps host port 8080 here (-p "8080:8080@loadbalancer"). Not 80/443:
