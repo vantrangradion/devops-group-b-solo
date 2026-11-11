@@ -44,6 +44,10 @@ const (
 	shutdownTimeout = 10 * time.Second
 )
 
+// version is the commit the binary was built from. The Dockerfile sets it
+// with -ldflags "-X main.version=<sha>"; a plain go build leaves "dev".
+var version = "dev"
+
 // config holds settings read from the environment. API_KEY is kept only as a
 // flag so its value can never leak into logs or responses.
 type config struct {
@@ -212,6 +216,8 @@ type workResponse struct {
 	MS      int    `json:"ms"`
 	Status  int    `json:"status"`
 	Error   string `json:"error,omitempty"`
+	// Version shows which build answered, so a deploy is visible from curl.
+	Version string `json:"version"`
 }
 
 func workHandler(cfg config, logger *slog.Logger, f *faults) http.HandlerFunc {
@@ -242,6 +248,7 @@ func workHandler(cfg config, logger *slog.Logger, f *faults) http.HandlerFunc {
 			AppEnv:  cfg.AppEnv,
 			MS:      ms,
 			Status:  http.StatusOK,
+			Version: version,
 		}
 		if err := doWork(r.Context(), ms, fail, fs); err != nil {
 			if r.Context().Err() != nil {
@@ -365,7 +372,7 @@ func run() error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		slog.Info("starting", "addr", addr, "admin_addr", cfg.AdminAddr, "app_env", cfg.AppEnv, "api_key_set", cfg.APIKeySet)
+		slog.Info("starting", "version", version, "addr", addr, "admin_addr", cfg.AdminAddr, "app_env", cfg.AppEnv, "api_key_set", cfg.APIKeySet)
 		errCh <- srv.ListenAndServe()
 	}()
 	go func() {

@@ -15,6 +15,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 )
 
 // setupTelemetry pushes spans, metrics and logs over OTLP/HTTP for each signal that
@@ -39,8 +40,14 @@ func setupTelemetry(ctx context.Context) (shutdown func(context.Context) error, 
 	}()
 
 	// resource.Default reads OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES.
-	res, err := resource.Merge(resource.Default(), resource.Environment())
+	// service.version is the build's commit, so traces, metrics and logs say
+	// which deploy produced them; OTEL_RESOURCE_ATTRIBUTES can still override it.
+	res, err := resource.Merge(resource.Default(),
+		resource.NewSchemaless(semconv.ServiceVersion(version)))
 	if err != nil {
+		return shutdown, err
+	}
+	if res, err = resource.Merge(res, resource.Environment()); err != nil {
 		return shutdown, err
 	}
 
