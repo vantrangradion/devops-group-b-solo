@@ -49,6 +49,22 @@ func TestWorkReturnsMessage(t *testing.T) {
 	}
 }
 
+// TestWorkReturnsVersion checks that /api/work names the build that
+// answered, so a deploy is visible from curl.
+func TestWorkReturnsVersion(t *testing.T) {
+	old := version
+	version = "abc1234"
+	t.Cleanup(func() { version = old })
+
+	var body workResponse
+	if err := json.NewDecoder(do(t, newMux(testConfig), "/api/work?ms=0").Body).Decode(&body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Version != "abc1234" {
+		t.Errorf("version = %q, want %q", body.Version, "abc1234")
+	}
+}
+
 // The k6 check expects the configmap message on every response, failed ones
 // included, so the error is added to the body rather than replacing it.
 func TestWorkFailureKeepsMessage(t *testing.T) {

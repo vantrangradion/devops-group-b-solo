@@ -9,9 +9,13 @@ RUN go mod download
 
 COPY *.go ./
 
+# The commit being built; CI passes --build-arg VERSION=<sha>. The app returns
+# it in /api/work and as service.version on its telemetry.
+ARG VERSION=dev
+
 # Static amd64 binary: distroless/static has no libc.
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" -o /out/devops-app .
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/devops-app .
 
 # Runtime: no shell, no package manager, runs as nonroot.
 FROM gcr.io/distroless/static:nonroot
