@@ -1,0 +1,26 @@
+# Deploys k8s/base of this repo, whose CI publishes the images and commits
+# each new tag to k8s/base (the gradionhq Actions budget is used up). Same
+# manifests as the team repo's common-deliverable/shared-system/k8s. Public
+# repo and public image, so Argo CD needs no repo credential and the cluster
+# no pull secret.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: devops-app
+  namespace: argocd
+spec:
+  project: devops-demo
+  source:
+    repoURL: https://github.com/vantrangradion/devops-group-b-solo.git
+    targetRevision: main
+    path: k8s/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops-app
+  syncPolicy:
+    automated:
+      enabled: true
+      # Undoes hand edits on the cluster, such as kubectl scale.
+      selfHeal: true
+      # A resource removed from Git stays on the cluster until deleted by hand.
+      prune: false

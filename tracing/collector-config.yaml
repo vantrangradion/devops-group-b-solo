@@ -1,0 +1,79 @@
+# OpenTelemetry Collector (contrib 0.164.0). The app sends its traces,
+# metrics and logs over OTLP here and only knows this address; the backends
+# are chosen below, so swapping Tempo, Prometheus or Loki for another backend
+# is a change to this file, not to the app.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # First in the pipeline: refuses data before the pod hits its memory limit.
+  # Percentages are of the container limit (cgroup).
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  # Prometheus stores what it receives as is, so each series needs the
+  # namespace and pod labels the dashboard filters on. They come from the
+  # app's resource attributes (OTEL_RESOURCE_ATTRIBUTES in the Deployment);
+  # the pod label also keeps the two replicas' counters in separate series.
+  transform/k8s-labels:
+    error_mode: ignore
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(attributes["namespace"], resource.attributes["k8s.namespace.name"]) where resource.attributes["k8s.namespace.name"] != nil
+          - set(attributes["pod"], resource.attributes["k8s.pod.name"]) where resource.attributes["k8s.pod.name"] != nil
+  # After memory_limiter (and any sampling), so only kept data is batched.
+  batch:
+    timeout: 1s
+
+exporters:
+  # Since v0.14x the OTLP gRPC exporter is named otlp_grpc, not otlp.
+  otlp_grpc/tempo:
+    endpoint: tempo.monitoring.svc:4317
+    tls:
+      insecure: true
+  # Pushes the app's metrics, with their trace_id exemplars, to Prometheus's
+  # OTLP receiver (enableOTLPReceiver in monitoring/values.yaml). Prometheus
+  # names them (http_requests_total, http_request_duration_seconds).
+  otlp_http/prometheus:
+    metrics_endpoint: http://kps-kube-prometheus-stack-prometheus.monitoring.svc:9090/api/v1/otlp/v1/metrics
+  # Pushes the app's logs to Loki's native OTLP endpoint (logging/). Loki keeps
+  # each record's trace_id and span_id as structured metadata.
+  otlp_http/loki:
+    logs_endpoint: http://loki.monitoring.svc:3100/otlp/v1/logs
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_grpc/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/k8s-labels, batch]
+      exporters: [otlp_http/prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/loki]
+  telemetry:
+    # The Collector's own metrics (otelcol_*), scraped by Prometheus. The
+    # default listens on localhost only.
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888

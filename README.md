@@ -6,16 +6,33 @@ Personal solo repo for the Group B DevOps & Observability Research assignment. I
 - `p2`: Pillar 2 (Kubernetes & remote access), branched from `main`
 - `p3`: Pillar 3 (observability & load test), branched from the team repo's `main` after CP2
 
+## Run the demo
+
+Everything for the live demo runs from this repo's root. The team deliverable, with the same system and the recorded captures, is [gradionhq/2026-devops-assignment-intern › common-deliverable/shared-system](https://github.com/gradionhq/2026-devops-assignment-intern/tree/main/common-deliverable/shared-system).
+
+```sh
+make up        # k3d cluster devops-solo, Argo CD, kube-prometheus-stack, Loki, Tempo, Collector, steady load
+make check     # one request, Collector counts, one trace in Tempo
+make status    # pods and the port-forward commands for Grafana, Prometheus and Argo CD
+```
+
+The demo itself, one push from code to cluster to Grafana, is in [gitops/README.md › Live demo](gitops/README.md#live-demo). Fault toggles: [app/README.md › Fault toggles](app/README.md#fault-toggles). Load: [load-tests/README.md](load-tests/README.md).
+
 ## Layout
 
 ```
 app/                  Go service, Dockerfile, Makefile, lint config (Docker build context)
-.github/workflows/    CI (Go and lint steps run with working-directory: app)
-k8s/base/             Namespace, Deployment, Service, ConfigMap, Secret, kustomization
-k8s/monitoring/       kube-prometheus-stack values, ServiceMonitor
-load-tests/           k6 scripts
+.github/workflows/    CI: lint, test, scan, build, publish, then Deploy commits the new tag to k8s/base
+k8s/base/             Namespace, Deployment, Services, ConfigMap, Secret (what Argo CD deploys)
+gitops/               Argo CD install, AppProject and Application (watches k8s/base on main)
+monitoring/           kube-prometheus-stack values and the devops-app dashboard
+tracing/              OpenTelemetry Collector and Tempo
+logging/              Loki
+load-tests/           k6 ramp test, and k8s/ for the steady in-cluster load
+scripts/fault.sh      Runtime fault toggles on the running pods
+Makefile              make up / status / check / down / tunnel
 docs/                 Research write-ups
-captures/             Evidence screenshots and command output
+captures/             Evidence screenshots and command output (Pillars 1 and 2)
 ```
 
 ## Toolchain

@@ -7,12 +7,12 @@ on:
     branches: [main]
     # Release tags also publish; paths filters never apply to tag pushes.
     tags: ["v*"]
-    paths-ignore:
-      - "captures/**"
-      - "docs/**"
-      # Manifest-only pushes (the Deploy job's own commit, or a hand edit)
-      # change nothing in the image, so they do not rebuild it.
-      - "k8s/**"
+    # Only a change to the image's inputs builds and deploys. Manifests (the
+    # Deploy job's own commit, or a hand edit), the demo system around the app
+    # (monitoring/, tracing/, gitops/, ...) and docs never rebuild it.
+    paths:
+      - "app/**"
+      - ".github/workflows/ci.yml"
   # No path filter, so required PR checks always report.
   pull_request:
     branches: [main]
@@ -258,8 +258,8 @@ jobs:
 
   # GitOps: points k8s/base at the image Publish just pushed. Argo CD watches
   # k8s/base on main and rolls the pods (within ~3 min, or at once on Refresh).
-  # A push made with GITHUB_TOKEN starts no new workflow run, and k8s/** is in
-  # paths-ignore anyway, so this commit cannot loop back into CI.
+  # A push made with GITHUB_TOKEN starts no new workflow run, and k8s/ is outside
+  # the push paths filter anyway, so this commit cannot loop back into CI.
   deploy:
     name: Deploy
     needs: publish

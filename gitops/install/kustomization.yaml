@@ -1,0 +1,19 @@
+# Argo CD v3.5.6, the same pin as Sang's lab (#102).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+resources:
+  - namespace.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.6/manifests/install.yaml
+
+# One Application, local admin login and no notifications, so only the server,
+# repo-server, Redis and application-controller run.
+replicas:
+  - name: argocd-applicationset-controller
+    count: 0
+  - name: argocd-dex-server
+    count: 0
+  - name: argocd-notifications-controller
+    count: 0
