@@ -1,0 +1,26 @@
+# Limits the demo Application to one repo, the devops-app namespace and the
+# kinds that k8s/base/ creates.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: devops-demo
+  namespace: argocd
+spec:
+  description: Shared devops-app on the local k3d demo cluster
+  sourceRepos:
+    - https://github.com/vantrangradion/devops-group-b-solo.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: devops-app
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Secret
+    - group: ""
+      kind: Service
+    - group: apps
+      kind: Deployment

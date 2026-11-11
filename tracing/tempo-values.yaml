@@ -1,0 +1,35 @@
+# grafana-community/tempo, pinned to chart 3.2.1 (Tempo 3.1.1). The older
+# grafana/tempo chart is deprecated. Single binary, local disk, no
+# persistence: traces are lost when the pod restarts, which is fine for a
+# local demo.
+tempo:
+  retention: 24h
+  # No anonymous usage report to Grafana Labs.
+  reportingEnabled: false
+  # The chart's default receivers stay (OTLP gRPC/HTTP plus Jaeger): its
+  # Service template needs the Jaeger keys. Only the Collector sends here,
+  # over OTLP gRPC on 4317.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+  # Blocks and WAL go to an emptyDir, so the root filesystem stays read-only.
+  extraVolumeMounts:
+    - name: data
+      mountPath: /var/tempo
+extraVolumes:
+  - name: data
+    emptyDir:
+      sizeLimit: 1Gi
+serviceAccount:
+  automountServiceAccountToken: false
+# Tempo's own metrics (tempo_*), scraped by Prometheus.
+serviceMonitor:
+  enabled: true

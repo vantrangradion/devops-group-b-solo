@@ -1,0 +1,131 @@
+# prometheus-community/kube-prometheus-stack, pinned to chart 92.10.0 (the
+# shared-system pin). Local demo only: no persistence, no ingress; Grafana and
+# Prometheus are reached with kubectl port-forward.
+defaultRules:
+  create: false
+# Alerting is out of scope (brief section 7).
+alertmanager:
+  enabled: false
+grafana:
+  defaultDashboardsEnabled: false
+  persistence:
+    enabled: false
+  # 384Mi OOM-killed Grafana while it loaded its frontend in the shared-system
+  # test (PR #68), so keep its 1Gi limit and Go memory target.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+  env:
+    GOMEMLIMIT: 768MiB
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: monitoring
+    datasources:
+      uid: prometheus
+      # Exemplars on the Prometheus datasource carry trace_id; this turns each
+      # one into a link to that trace in Tempo.
+      exemplarTraceIdDestinations:
+        datasourceUid: tempo
+        traceIdLabelName: trace_id
+        urlDisplayLabel: View trace
+  # Tempo from tracing/tempo-values.yaml (release tempo, namespace monitoring).
+  additionalDataSources:
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      access: proxy
+      url: http://tempo.monitoring.svc:3200
+      jsonData:
+        nodeGraph:
+          enabled: true
+        # "Logs for this span" opens the app's log records with this trace ID
+        # in Loki. Loki keeps trace_id as structured metadata, not in the log
+        # line, so a custom query filters on it instead of a line match. $$
+        # stops Grafana's provisioning from expanding the variables.
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: -5m
+          spanEndTimeShift: 5m
+          tags:
+            - key: service.name
+              value: service_name
+          customQuery: true
+          query: '{$${__tags}} | trace_id="$${__trace.traceId}"'
+    # Loki from logging/loki-values.yaml (release loki, namespace monitoring).
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      url: http://loki.monitoring.svc:3100
+      jsonData:
+        # Each record's trace_id (structured metadata) links to its trace.
+        derivedFields:
+          - name: TraceID
+            matcherType: label
+            matcherRegex: trace_id
+            datasourceUid: tempo
+            url: "$${__value.raw}"
+            urlDisplayLabel: View trace
+prometheus:
+  prometheusSpec:
+    # Pick up ServiceMonitors without the chart's release label.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    retention: 1d
+    # Keeps the trace_id exemplars the app sends on its latency histogram.
+    enableFeatures:
+      - exemplar-storage
+    # The Collector pushes the app's metrics here (/api/v1/otlp/v1/metrics);
+    # nothing scrapes the app. The receiver has no authentication, so it is
+    # reachable only inside the cluster.
+    enableOTLPReceiver: true
+    otlp:
+      # Prometheus's own default, set explicitly because the chart's example
+      # suggests NoUTF8EscapingWithSuffixes, which would keep the dots
+      # (http.requests_total) and break the dashboard queries.
+      translationStrategy: UnderscoreEscapingWithSuffixes
+    # A Collector retry can deliver a sample after a newer one; the
+    # Prometheus OpenTelemetry guide suggests 30m.
+    tsdb:
+      outOfOrderTimeWindow: 30m
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 768Mi
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+# kubelet/cAdvisor supplies pod CPU and memory; kube-state-metrics supplies
+# ready replicas. Both stay on.
+kubelet:
+  enabled: true
+kubeStateMetrics:
+  enabled: true
+# Not used by the dashboard, and k3s does not expose these components on the
+# addresses the default monitors scrape.
+nodeExporter:
+  enabled: false
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+coreDns:
+  enabled: false
