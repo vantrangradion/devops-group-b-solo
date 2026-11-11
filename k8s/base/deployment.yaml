@@ -37,7 +37,7 @@ spec:
               app.kubernetes.io/name: devops-app
       containers:
         - name: devops-app
-          image: ghcr.io/vantrangradion/devops-app:70ba364993a286d01db976abd4d57507a30c932f
+          image: ghcr.io/vantrangradion/devops-app:ae74c444911ac46427033f67b2390332df1cb58e
           ports:
             - name: http
               containerPort: 8080
