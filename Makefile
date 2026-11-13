@@ -28,11 +28,13 @@ else
 USE_ARGOCD ?= 1
 endif
 
-.PHONY: help up cluster repos app monitoring tracing logging load status check down tunnel
+.PHONY: help up cluster repos app monitoring tracing logging load status check down tunnel ui ui-status ui-stop
 
 help:
 	@echo "make up       create or update the cluster and install everything (safe to rerun)"
-	@echo "make status   pods and port-forward commands"
+	@echo "make status   pods, app URL and Argo CD sync state"
+	@echo "make ui       Grafana, Argo CD and Prometheus on localhost, kept up in the background"
+	@echo "make ui-stop  stop those forwards (make ui-status shows them)"
 	@echo "make check    one request, Collector counts, one trace in Tempo; non-zero on failure"
 	@echo "make down     delete the k3d cluster (asks first; FORCE=1 skips the prompt)"
 	@echo "make tunnel   public quick tunnel to the app (cloudflared)"
@@ -43,6 +45,8 @@ help:
 up: cluster repos app monitoring tracing logging load
 	@$(KUBECTL) rollout status deploy/devops-app -n devops-app --timeout 3m
 	@$(MAKE) --no-print-directory status
+	@echo
+	@KUBE_CONTEXT=$(CTX) scripts/ui.sh start
 
 cluster:
 	@if k3d cluster get $(CLUSTER) >/dev/null 2>&1; then \
@@ -97,13 +101,10 @@ status:
 	done
 	@echo
 	@echo "App:        http://localhost:$(APP_PORT)/api/work"
-	@echo "Grafana:    kubectl --context $(CTX) port-forward -n monitoring svc/kps-grafana 3000:80          -> http://localhost:3000"
-	@echo "Prometheus: kubectl --context $(CTX) port-forward -n monitoring svc/kps-kube-prometheus-stack-prometheus 9090:9090 -> http://localhost:9090"
 	@if $(KUBECTL) get ns argocd >/dev/null 2>&1; then \
-	  echo "Argo CD:    kubectl --context $(CTX) port-forward -n argocd svc/argocd-server 8443:443        -> https://localhost:8443"; \
-	  echo "            app: $$($(KUBECTL) -n argocd get application devops-app -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null || echo 'no Application')"; \
+	  echo "Argo CD app: $$($(KUBECTL) -n argocd get application devops-app -o jsonpath='{.status.sync.status}/{.status.health.status}' 2>/dev/null || echo 'no Application')"; \
 	fi
-	@echo "Passwords:  see monitoring/README.md and gitops/README.md (not printed here)"
+	@echo "Web UIs:    make ui (Grafana, Argo CD, Prometheus on localhost)"
 
 # Reads the Collector and Tempo through the API server proxy, so no
 # port-forward is needed.
@@ -133,6 +134,17 @@ down:
 	  [ "$$ans" = y ] || [ "$$ans" = Y ] || { echo "kept $(CLUSTER)"; exit 0; }; \
 	fi; \
 	k3d cluster delete $(CLUSTER)
+
+# Grafana, Argo CD and Prometheus live in the cluster; scripts/ui.sh keeps a
+# port-forward to each running in the background and restarts it if it drops.
+ui:
+	@KUBE_CONTEXT=$(CTX) scripts/ui.sh start
+
+ui-status:
+	@KUBE_CONTEXT=$(CTX) scripts/ui.sh status
+
+ui-stop:
+	@KUBE_CONTEXT=$(CTX) scripts/ui.sh stop
 
 # Public URL for the app; rate-limited, so never point k6 at it.
 tunnel:
