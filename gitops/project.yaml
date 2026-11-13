@@ -24,3 +24,10 @@ spec:
       kind: Service
     - group: apps
       kind: Deployment
+    # Not in k8s/base: the Deployment creates these. Argo CD leaves kinds the
+    # project does not permit out of the resource tree, so without them the
+    # screen shows no ReplicaSets or pods during a rollout.
+    - group: apps
+      kind: ReplicaSet
+    - group: ""
+      kind: Pod
