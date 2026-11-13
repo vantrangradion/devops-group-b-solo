@@ -11,9 +11,11 @@ Personal solo repo for the Group B DevOps & Observability Research assignment. I
 Everything for the live demo runs from this repo's root. The team deliverable, with the same system and the recorded captures, is [gradionhq/2026-devops-assignment-intern › common-deliverable/shared-system](https://github.com/gradionhq/2026-devops-assignment-intern/tree/main/common-deliverable/shared-system).
 
 ```sh
-make up        # k3d cluster devops-solo, Argo CD, kube-prometheus-stack, Loki, Tempo, Collector, steady load
+make up        # k3d cluster devops-solo, Argo CD, kube-prometheus-stack, Loki, Tempo, Collector, steady load; ends with make ui
 make check     # one request, Collector counts, one trace in Tempo
-make status    # pods and the port-forward commands for Grafana, Prometheus and Argo CD
+make ui        # Grafana :3000, Argo CD :8443, Prometheus :9090 on localhost, restarted in the background if they drop
+make ui-stop   # stop those forwards (make ui-status shows them)
+make status    # pods, app URL and Argo CD sync state
 ```
 
 The demo itself, one push from code to cluster to Grafana, is in [gitops/README.md › Live demo](gitops/README.md#live-demo). Fault toggles: [app/README.md › Fault toggles](app/README.md#fault-toggles). Load: [load-tests/README.md](load-tests/README.md).
