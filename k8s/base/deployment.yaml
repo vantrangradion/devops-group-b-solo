@@ -7,6 +7,9 @@ metadata:
     app.kubernetes.io/name: devops-app
 spec:
   replicas: 2
+  # Keep one old ReplicaSet: enough for `kubectl rollout undo` to the previous
+  # version, and a short tree in Argo CD. Git holds the full history.
+  revisionHistoryLimit: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: devops-app
