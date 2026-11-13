@@ -15,6 +15,7 @@ make up        # k3d cluster devops-solo, Argo CD, kube-prometheus-stack, Loki, 
 make check     # one request, Collector counts, one trace in Tempo
 make ui        # Grafana :3000, Argo CD :8443, Prometheus :9090 on localhost, restarted in the background if they drop
 make ui-stop   # stop those forwards (make ui-status shows them)
+make load-test # the demo's k6 ramp: 20 virtual users for about 1.5 minutes
 make status    # pods, app URL and Argo CD sync state
 ```
 

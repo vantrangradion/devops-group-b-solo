@@ -28,7 +28,7 @@ else
 USE_ARGOCD ?= 1
 endif
 
-.PHONY: help up cluster repos app monitoring tracing logging load status check down tunnel ui ui-status ui-stop
+.PHONY: help up cluster repos app monitoring tracing logging load status check down tunnel ui ui-status ui-stop load-test
 
 help:
 	@echo "make up       create or update the cluster and install everything (safe to rerun)"
@@ -36,6 +36,7 @@ help:
 	@echo "make ui       Grafana, Argo CD and Prometheus on localhost, kept up in the background"
 	@echo "make ui-stop  stop those forwards (make ui-status shows them)"
 	@echo "make check    one request, Collector counts, one trace in Tempo; non-zero on failure"
+	@echo "make load-test  the demo's k6 ramp: 20 virtual users for about 1.5 minutes (STAGES= to change)"
 	@echo "make down     delete the k3d cluster (asks first; FORCE=1 skips the prompt)"
 	@echo "make tunnel   public quick tunnel to the app (cloudflared)"
 	@echo "USE_ARGOCD=$(USE_ARGOCD)  (1: Argo CD deploys the app from gitops/, 0: kubectl apply -k k8s/base/)"
@@ -145,6 +146,14 @@ ui-status:
 
 ui-stop:
 	@KUBE_CONTEXT=$(CTX) scripts/ui.sh stop
+
+# The live demo's load test: ramp to 20 virtual users, hold 1 minute, ramp
+# down (about 1.5 minutes in all). The recipe line is not hidden with @, so
+# the audience sees the real k6 command. Needs k6 on the laptop. The full
+# 6-minute test is plain `k6 run load-tests/test.js`.
+STAGES ?= --stage 30s:20 --stage 1m:20 --stage 10s:0
+load-test:
+	k6 run $(STAGES) load-tests/test.js
 
 # Public URL for the app; rate-limited, so never point k6 at it.
 tunnel:
