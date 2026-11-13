@@ -29,6 +29,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// Hello World
+
 const (
 	addr = ":8080"
 	// defaultAdminAddr serves the fault toggles (faults.go). It is in no
